@@ -1,16 +1,16 @@
 import os
 from pathlib import Path
 
-# ── Credentials ───────────────────────────────────────────────────────────────
+# -- Credentials ---------------------------------------------------------------
 _HERE = Path(__file__).parent
 GOOGLE_CREDS = _HERE.parent / "smiling-breaker-423712-h3-aff7ac746ad4.json"
 os.environ.setdefault("GOOGLE_APPLICATION_CREDENTIALS", str(GOOGLE_CREDS))
 
-# ── Models ────────────────────────────────────────────────────────────────────
+# -- Models --------------------------------------------------------------------
 MODEL_FLASH_NAME = "gemini-2.5-flash"
 MODEL_PRO_NAME   = "gemini-2.5-pro"
 
-# ── Source / Output Paths ─────────────────────────────────────────────────────
+# -- Source / Output Paths -----------------------------------------------------
 SOURCE_ROOT  = Path(r"D:")
 OUTPUT_ROOT  = Path(r"D:\project_outputs")
 
@@ -25,24 +25,25 @@ LOGS_DIR           = OUTPUT_ROOT / "logs"
 MANUAL_REVIEW_DIR  = OUTPUT_ROOT / "manual_review"
 FAILED_RECORDS_CSV = MANUAL_REVIEW_DIR / "failed_records.csv"
 
-# ── Stages ────────────────────────────────────────────────────────────────────
+# -- Stages --------------------------------------------------------------------
+STAGE_LATLONG  = "latlong"   # runs first; if coords found, grid+location skipped
 STAGE_GRID     = "grid"
 STAGE_LOCATION = "location"
 STAGE_COUNTY   = "county"
-ALL_STAGES     = (STAGE_GRID, STAGE_LOCATION, STAGE_COUNTY)
+ALL_STAGES     = (STAGE_LATLONG, STAGE_GRID, STAGE_LOCATION, STAGE_COUNTY)
 
-# ── Page / Crop ───────────────────────────────────────────────────────────────
+# -- Page / Crop ---------------------------------------------------------------
 PAGE_TO_PROCESS         = 0
 EXTEND_LEFT_PIXELS      = 700
 EXTEND_RIGHT_PIXELS     = 400
 VERTICAL_PADDING_PIXELS = 50
 RESOLUTION_MULTIPLIER   = 2
 
-# ── Grid ──────────────────────────────────────────────────────────────────────
+# -- Grid ----------------------------------------------------------------------
 GRID_ROWS, GRID_COLS = 8, 8
 STD_GRID_SIZE        = 512
 
-# ── Keywords ──────────────────────────────────────────────────────────────────
+# -- Keywords ------------------------------------------------------------------
 LOCATION_KEYWORDS = {
     "section":  ["section", "sec", "sec."],
     "township": ["township", "twn", "tvp", "twp"],
@@ -54,7 +55,7 @@ COUNTY_KEYWORDS = [
     "count",  "County", "County.", "County..", "Count",
 ]
 
-# ── County Reference ──────────────────────────────────────────────────────────
+# -- County Reference ----------------------------------------------------------
 COUNTY_LIST_RAW = [
     'Garfield County',     'Harper County',      'Tillman County',
     'Pushmataha County',   'Beckham County',     'Lincoln County',
@@ -96,9 +97,9 @@ COUNTY_MAP_CLEAN_TO_ORIGINAL = {
     for n in VALID_COUNTY_LIST_ORIGINAL
 }
 
-# ── Thresholds ────────────────────────────────────────────────────────────────
+# -- Thresholds ----------------------------------------------------------------
 FUZZY_MATCH_THRESHOLD      = 86
 RETRY_CONFIDENCE_THRESHOLD = 95
 
-# ── Processing ────────────────────────────────────────────────────────────────
+# -- Processing ----------------------------------------------------------------
 MAX_WORKERS = max(1, os.cpu_count() - 1)

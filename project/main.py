@@ -34,7 +34,7 @@ from config import (
     ALL_STAGES, DATASET_INDEX_CSV, FAILED_RECORDS_CSV,
     OUTPUT_ROOT, PROCESSING_STATUS_CSV,
     RESOLUTION_MULTIPLIER, SOURCE_ROOT,
-    STAGE_COUNTY, STAGE_GRID, STAGE_LOCATION,
+    STAGE_COUNTY, STAGE_GRID, STAGE_LATLONG, STAGE_LOCATION,
 )
 from pdf.pdf_manager import PDFDocumentManager
 from scan_dataset import DatasetRecord, OutputPathBuilder, load_index, scan_flat_folder
@@ -46,12 +46,29 @@ log = get_logger(__name__)
 
 _SUMMARY_FIELDS = [
     "pdf_path", "pdf_stem", "collection", "year", "month",
+    "latlong_found", "lat", "lon", "latlong_confidence", "latlong_page",
+    "well_name", "well_type",
     "grid_found", "grid_page", "grid_method", "grid_confidence",
     "location_found", "section", "township", "range", "location_confidence",
     "county_found", "county_name", "county_score", "county_confidence",
     "all_success",
-    "grid_status", "location_status", "county_status",
+    "latlong_status", "grid_status", "location_status", "county_status",
 ]
+
+_LATLONG_FIELDS = [
+    "pdf_path", "pdf_stem", "collection", "year", "month",
+    "well_name", "well_type",
+    "lat", "lon", "latlong_confidence", "latlong_page",
+    "county_name", "county_score",
+]
+
+
+def _well_name_from_stem(pdf_stem: str) -> str:
+    first = pdf_stem.find("_")
+    last  = pdf_stem.rfind("_")
+    if first != -1 and last != first:
+        return pdf_stem[first + 1: last]
+    return pdf_stem
 
 
 # -- PDF source resolution -----------------------------------------------------
@@ -109,15 +126,24 @@ def write_summary_csv(status: ProcessingStatus, output_path: Path):
         writer = csv.DictWriter(f, fieldnames=_SUMMARY_FIELDS, extrasaction="ignore")
         writer.writeheader()
         for row in status._rows.values():
-            g = row.get("grid_status")     == DONE
-            l = row.get("location_status") == DONE
-            c = row.get("county_status")   == DONE
+            stem = row.get("pdf_stem", "")
+            ll   = bool(row.get("latlong_lat")) and bool(row.get("latlong_lon"))
+            g    = row.get("grid_status")     == DONE
+            l    = row.get("location_status") == DONE
+            c    = row.get("county_status")   == DONE
             writer.writerow({
                 "pdf_path":            row.get("pdf_path", ""),
-                "pdf_stem":            row.get("pdf_stem", ""),
+                "pdf_stem":            stem,
                 "collection":          row.get("collection", ""),
                 "year":                row.get("year", ""),
                 "month":               row.get("month", ""),
+                "latlong_found":       ll,
+                "lat":                 row.get("latlong_lat", ""),
+                "lon":                 row.get("latlong_lon", ""),
+                "latlong_confidence":  row.get("latlong_confidence", ""),
+                "latlong_page":        row.get("latlong_page", ""),
+                "well_name":           _well_name_from_stem(stem),
+                "well_type":           row.get("latlong_well_type", ""),
                 "grid_found":          g,
                 "grid_page":           row.get("grid_page", ""),
                 "grid_method":         row.get("grid_method", ""),
@@ -131,13 +157,44 @@ def write_summary_csv(status: ProcessingStatus, output_path: Path):
                 "county_name":         row.get("county_name", ""),
                 "county_score":        row.get("county_score", ""),
                 "county_confidence":   row.get("county_confidence", ""),
-                "all_success":         g and l and c,
+                "all_success":         (ll or (g and l)) and c,
+                "latlong_status":      row.get("latlong_status", ""),
                 "grid_status":         row.get("grid_status", ""),
                 "location_status":     row.get("location_status", ""),
                 "county_status":       row.get("county_status", ""),
             })
             count += 1
     log.info("Summary CSV -> %s  (%d rows)", output_path, count)
+
+
+def write_latlong_csv(status: ProcessingStatus, output_path: Path):
+    """Write a focused CSV containing only records where lat/lon was found."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    count = 0
+    with output_path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=_LATLONG_FIELDS, extrasaction="ignore")
+        writer.writeheader()
+        for row in status._rows.values():
+            if not (row.get("latlong_lat") and row.get("latlong_lon")):
+                continue
+            stem = row.get("pdf_stem", "")
+            writer.writerow({
+                "pdf_path":           row.get("pdf_path", ""),
+                "pdf_stem":           stem,
+                "collection":         row.get("collection", ""),
+                "year":               row.get("year", ""),
+                "month":              row.get("month", ""),
+                "well_name":          _well_name_from_stem(stem),
+                "well_type":          row.get("latlong_well_type", ""),
+                "lat":                row.get("latlong_lat", ""),
+                "lon":                row.get("latlong_lon", ""),
+                "latlong_confidence": row.get("latlong_confidence", ""),
+                "latlong_page":       row.get("latlong_page", ""),
+                "county_name":        row.get("county_name", ""),
+                "county_score":       row.get("county_score", ""),
+            })
+            count += 1
+    log.info("Lat/Lon CSV -> %s  (%d records with coordinates)", output_path, count)
 
 
 # -- Per-record processing -----------------------------------------------------
@@ -176,6 +233,18 @@ def run_one_record(
             pdf_log.info("[%s] already done -- skip", stage.upper())
             continue
 
+        # Skip grid + location if lat/lon was found (this run or a previous run)
+        if stage in (STAGE_GRID, STAGE_LOCATION):
+            ll_found = (
+                results.get(STAGE_LATLONG, {}).get("detected", False)
+                or status.latlong_detected(record.pdf_stem)
+            )
+            if ll_found:
+                status.mark_skipped(record.pdf_stem, stage)
+                pdf_log.info("[%s] skipped -- lat/lon found in document",
+                             stage.upper())
+                continue
+
         pdf_log.info("[%s] starting", stage.upper())
         t0 = time.monotonic()
 
@@ -207,6 +276,10 @@ def run_one_record(
 
 def _dispatch(stage: str, manager: PDFDocumentManager,
               out_dir: Path, pdf_stem: str, log) -> dict:
+    if stage == STAGE_LATLONG:
+        from latlong.latlong_extractor import process_single_latlong
+        return process_single_latlong(manager, pdf_stem, log)
+
     if stage == STAGE_GRID:
         from grid.scoring import process_single_grid
         return process_single_grid(manager, out_dir, pdf_stem, log)
@@ -375,6 +448,7 @@ def run_pipeline(args):
                  s, c.get(DONE, 0), c.get(FAILED, 0), c.get("pending", 0))
 
     write_summary_csv(status, output_root / "summary.csv")
+    write_latlong_csv(status, output_root / "latlong_records.csv")
 
 
 def print_status(status_csv: Path):

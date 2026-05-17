@@ -1,0 +1,13 @@
+**/__pycache__
+**/*.pyc
+.git
+.claude
+ONBOARDING.md
+CONTEXT.md
+context.md
+aws/results
+aws/build
+project/_smoketest.py
+project_outputs*
+*.zip
+*.pdf

@@ -12,7 +12,7 @@ def get_logger(name: str) -> logging.Logger:
     logger = logging.getLogger(name)
     if not logger.handlers:
         logger.setLevel(logging.DEBUG)
-        sh = logging.StreamHandler()
+        sh = logging.StreamHandler(stream=__import__("sys").stdout)
         sh.setLevel(logging.INFO)
         sh.setFormatter(_FMT)
         logger.addHandler(sh)
@@ -34,7 +34,7 @@ def get_pdf_logger(pdf_stem: str, log_path: Path) -> logging.Logger:
     logger.setLevel(logging.DEBUG)
     logger.propagate = False
 
-    sh = logging.StreamHandler()
+    sh = logging.StreamHandler(stream=__import__("sys").stdout)
     sh.setLevel(logging.INFO)
     sh.setFormatter(_FMT)
     logger.addHandler(sh)

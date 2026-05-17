@@ -13,12 +13,12 @@ Usage:
 
 Output mirrors input hierarchy:
     D:\\project_outputs\\
-    ├── processing_status.csv
-    ├── grids\\ExportedFolderContents_1\\{year}\\{month}\\{stem}\\
-    ├── locations\\...
-    ├── counties\\...
-    ├── metadata\\...\\metadata.json
-    └── logs\\...\\{stem}.log
+    ├-- processing_status.csv
+    ├-- grids\\ExportedFolderContents_1\\{year}\\{month}\\{stem}\\
+    ├-- locations\\...
+    ├-- counties\\...
+    ├-- metadata\\...\\metadata.json
+    └-- logs\\...\\{stem}.log
 """
 
 import argparse
@@ -47,7 +47,7 @@ from utils.zip_reader import get_pdf_bytes
 log = get_logger(__name__)
 
 
-# ── PDF source resolution ─────────────────────────────────────────────────────
+# -- PDF source resolution -----------------------------------------------------
 
 def _make_manager(record: DatasetRecord) -> PDFDocumentManager:
     """
@@ -62,7 +62,7 @@ def _make_manager(record: DatasetRecord) -> PDFDocumentManager:
                               resolution_multiplier=RESOLUTION_MULTIPLIER)
 
 
-# ── Metadata writer ───────────────────────────────────────────────────────────
+# -- Metadata writer -----------------------------------------------------------
 
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
@@ -99,7 +99,7 @@ def _append_failed(record: DatasetRecord, stage: str, error: str):
         w.writerow([record.pdf_stem, record.pdf_path, stage, error, _now()])
 
 
-# ── Per-record processing ─────────────────────────────────────────────────────
+# -- Per-record processing -----------------------------------------------------
 
 def run_one_record(
     record: DatasetRecord,
@@ -161,7 +161,7 @@ def run_one_record(
 
     if results:
         mp = write_metadata(record, results, paths)
-        pdf_log.info("metadata → %s", mp)
+        pdf_log.info("metadata -> %s", mp)
 
     pdf_log.info("=== END %s ===\n", record.pdf_stem)
     return results
@@ -184,7 +184,7 @@ def _dispatch(stage: str, manager: PDFDocumentManager,
     raise ValueError(f"Unknown stage: {stage}")
 
 
-# ── Pipeline runner ───────────────────────────────────────────────────────────
+# -- Pipeline runner -----------------------------------------------------------
 
 def run_pipeline(args):
     output_root = Path(args.output)
@@ -193,7 +193,7 @@ def run_pipeline(args):
     paths  = OutputPathBuilder(output_root)
     status = ProcessingStatus(output_root / "processing_status.csv")
 
-    # ── Source records ────────────────────────────────────────────────────────
+    # -- Source records --------------------------------------------------------
     if args.pdf:
         pdf = Path(args.pdf)
         records = [DatasetRecord(pdf_stem=pdf.stem, pdf_path=str(pdf),
@@ -219,17 +219,17 @@ def run_pipeline(args):
     stages = (args.stage,) if args.stage else ALL_STAGES
     log.info("stages=%s  resume=%s  records=%d", stages, args.resume, len(records))
 
-    # ── Init status ───────────────────────────────────────────────────────────
+    # -- Init status -----------------------------------------------------------
     for r in records:
         status.init_record(r.pdf_stem, r.pdf_path,
                            r.collection, r.year, r.month)
     status.save()
 
-    # ── Main loop ─────────────────────────────────────────────────────────────
+    # -- Main loop -------------------------------------------------------------
     done = failed = skipped = 0
 
     for i, record in enumerate(records, 1):
-        if args.resume and status.all_done(record.pdf_stem):
+        if args.resume and all(status.is_done(record.pdf_stem, s) for s in stages):
             skipped += 1
             continue
 
@@ -251,9 +251,9 @@ def run_pipeline(args):
             _append_failed(record, "pipeline", str(exc))
             failed += 1
 
-    # ── Summary ───────────────────────────────────────────────────────────────
+    # -- Summary ---------------------------------------------------------------
     counts = status.counts()
-    log.info("─" * 55)
+    log.info("-" * 55)
     log.info("done=%d  failed=%d  skipped=%d", done, failed, skipped)
     for s in ALL_STAGES:
         c = counts.get(s, {})
@@ -272,7 +272,7 @@ def print_status(status_csv: Path):
     print()
 
 
-# ── CLI ───────────────────────────────────────────────────────────────────────
+# -- CLI -----------------------------------------------------------------------
 
 def main():
     ap = argparse.ArgumentParser(description="Oklahoma well records pipeline")

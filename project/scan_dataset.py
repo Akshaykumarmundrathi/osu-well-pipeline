@@ -26,7 +26,7 @@ from config import DATASET_INDEX_CSV, OUTPUT_ROOT, SOURCE_ROOT
 from utils.zip_reader import _extract_collection_num, list_pdfs_in_zip
 
 
-# ── DatasetRecord ─────────────────────────────────────────────────────────────
+# -- DatasetRecord -------------------------------------------------------------
 
 @dataclass
 class DatasetRecord:
@@ -44,7 +44,7 @@ class DatasetRecord:
     internal_path:    str   = ""   # path inside the ZIP   (empty for flat records)
 
 
-# ── Path helpers ──────────────────────────────────────────────────────────────
+# -- Path helpers --------------------------------------------------------------
 
 def _safe(s: str) -> str:
     return re.sub(r"[^\w]", "_", s).strip("_")
@@ -54,7 +54,7 @@ def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
 
 
-# ── Output path builder ───────────────────────────────────────────────────────
+# -- Output path builder -------------------------------------------------------
 
 class OutputPathBuilder:
     """Derives all output paths from a DatasetRecord, mirroring input hierarchy."""
@@ -82,7 +82,7 @@ class OutputPathBuilder:
         return self.root / "logs" / col / year / month / f"{r.pdf_stem}.log"
 
 
-# ── Scanning ──────────────────────────────────────────────────────────────────
+# -- Scanning ------------------------------------------------------------------
 
 def scan_collection_root(source_root: Path) -> list[DatasetRecord]:
     """
@@ -175,7 +175,7 @@ def scan_flat_folder(folder: Path) -> list[DatasetRecord]:
     ]
 
 
-# ── CSV I/O ───────────────────────────────────────────────────────────────────
+# -- CSV I/O -------------------------------------------------------------------
 
 _FIELDS = list(DatasetRecord.__dataclass_fields__.keys())
 
@@ -186,7 +186,7 @@ def write_index(records: list[DatasetRecord], csv_path: Path):
         w = csv.DictWriter(f, fieldnames=_FIELDS)
         w.writeheader()
         w.writerows(asdict(r) for r in records)
-    print(f"Wrote {len(records)} records → {csv_path}")
+    print(f"Wrote {len(records)} records -> {csv_path}")
 
 
 def load_index(csv_path: Path) -> list[DatasetRecord]:
@@ -203,7 +203,7 @@ def load_index(csv_path: Path) -> list[DatasetRecord]:
         ]
 
 
-# ── CLI ───────────────────────────────────────────────────────────────────────
+# -- CLI -----------------------------------------------------------------------
 
 def _summary(csv_path: Path):
     records = load_index(csv_path)

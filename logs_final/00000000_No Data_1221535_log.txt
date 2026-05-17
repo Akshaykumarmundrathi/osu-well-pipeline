@@ -1,7 +1,0 @@
-Processing PDF: C:\Users\akshay\Downloads\project_modular\pdfs\00000000_No Data_1221535.pdf
-
---- Page 1 ---
-✅ Grid extracted and saved: C:\Users\akshay\Downloads\project_modular\grid_images_final\00000000_No Data_1221535\00000000_No Data_1221535_page_1_grid.png
-
---- Page 2 ---
-⚠️ No grid detected on this page.

@@ -1,4 +1,0 @@
-Processing PDF: C:\Users\akshay\Downloads\project_modular\pdfs\00000000_No Data_1221410.pdf
-
---- Page 1 ---
-⚠️ No grid detected on this page.

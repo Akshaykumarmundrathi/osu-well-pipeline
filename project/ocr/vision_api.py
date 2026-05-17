@@ -1,107 +1,108 @@
+"""
+Google Cloud Vision OCR helpers.
+- Singleton client — one connection negotiation per process.
+- All image data via BytesIO — no temp files, parallel-safe.
+"""
+
 import io
 
 from google.cloud import vision
+from PIL import Image as PILImage
 
 from ocr.preprocessing import preprocess_image
 from pdf.pdf_manager import PDFDocumentManager
 
+# ── Singleton client ──────────────────────────────────────────────────────────
+_client: vision.ImageAnnotatorClient | None = None
 
-def detect_text_with_vision(image):
-    """
-    Saves the given PIL image to disk, preprocesses it,
-    and sends it to Google Vision using document_text_detection.
-    """
-    temp_image_path = "temp_image.png"
-    image.save(temp_image_path)
 
-    preprocessed_image = preprocess_image(temp_image_path)
+def _get_client() -> vision.ImageAnnotatorClient:
+    global _client
+    if _client is None:
+        _client = vision.ImageAnnotatorClient()
+    return _client
 
-    img_byte_array = io.BytesIO()
-    preprocessed_image.save(img_byte_array, format="PNG")
-    image_bytes = img_byte_array.getvalue()
 
-    client = vision.ImageAnnotatorClient()
-    vision_image = vision.Image(content=image_bytes)
-    response = client.document_text_detection(image=vision_image)
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
+def _pil_to_bytes(image: PILImage.Image) -> bytes:
+    buf = io.BytesIO()
+    image.convert("RGB").save(buf, format="PNG")
+    return buf.getvalue()
+
+
+# ── Public API ────────────────────────────────────────────────────────────────
+
+def detect_text_with_vision(pil_image: PILImage.Image):
+    """Preprocess PIL image in-memory → document_text_detection → annotations."""
+    processed  = preprocess_image(pil_image).convert("RGB")
+    image_bytes = _pil_to_bytes(processed)
+    response = _get_client().document_text_detection(
+        image=vision.Image(content=image_bytes)
+    )
     return response.text_annotations
 
 
-def get_page_annotations(pdf_path, page_num=0, resolution_multiplier=2.5):
+def get_page_annotations(
+    pdf_path: str = None,
+    page_num: int = 0,
+    resolution_multiplier: float = 2.5,
+    *,
+    pdf_bytes: bytes = None,
+    manager: PDFDocumentManager = None,
+):
     """
-    Uses centralized PDF manager to:
-      - render page
-      - convert to PIL
-      - run Vision OCR
-
-    Returns:
-        (text_annotations, pil_image)
+    Render a PDF page and run Vision OCR.
+    Accepts a file path, raw bytes, or an existing PDFDocumentManager.
+    Returns (text_annotations | None, pil_image | None).
     """
     try:
-        manager = PDFDocumentManager(
-            pdf_path,
-            resolution_multiplier=resolution_multiplier
-        )
+        if manager is None:
+            manager = PDFDocumentManager(
+                pdf_path, pdf_bytes=pdf_bytes,
+                resolution_multiplier=resolution_multiplier,
+            )
 
         pil_image = manager.get_page_pil(page_num)
-
         if pil_image is None:
             return None, None
 
-        img_byte_array = io.BytesIO()
-        pil_image.save(img_byte_array, format="PNG")
-        image_bytes = img_byte_array.getvalue()
-
-        client = vision.ImageAnnotatorClient()
-        vision_image = vision.Image(content=image_bytes)
-        response = client.document_text_detection(image=vision_image)
+        image_bytes = _pil_to_bytes(pil_image)
+        response = _get_client().document_text_detection(
+            image=vision.Image(content=image_bytes)
+        )
 
         if response.error.message:
-            print(f"Vision API Error: {response.error.message}")
             return None, pil_image
 
-        if not response.text_annotations:
-            return None, pil_image
+        return (response.text_annotations or None), pil_image
 
-        return response.text_annotations, pil_image
-
-    except Exception as e:
-        print(f"Error during PDF conversion or Vision API call: {e}")
+    except Exception as exc:
+        src = pdf_path or ("bytes" if pdf_bytes else "manager")
+        print(f"Vision API error ({src} page {page_num}): {exc}")
         return None, None
 
 
-def find_keyword_box(text_annotations, keywords_to_find):
+def find_keyword_box(text_annotations, keywords: list[str]) -> list | None:
     """
-    Finds the first annotation containing any keyword.
-    Returns bounding box [x_min, y_min, x_max, y_max].
+    First annotation token matching any keyword → [x_min, y_min, x_max, y_max].
+    Returns None if not found.
     """
     if not text_annotations:
         return None
-
-    # Skip full text annotation
-    for annotation in text_annotations[1:]:
-        raw_text = annotation.description
-        cleaned = raw_text.lower().strip('.,:')
-
-        for keyword in keywords_to_find:
-            if keyword.lower() in cleaned:
-                poly = annotation.bounding_poly
-                if not poly or not poly.vertices:
-                    continue
-
-                try:
-                    x_coords = [v.x for v in poly.vertices]
-                    y_coords = [v.y for v in poly.vertices]
-
-                    if not all(isinstance(c, (int, float)) for c in x_coords + y_coords):
-                        continue
-
-                    return [
-                        min(x_coords),
-                        min(y_coords),
-                        max(x_coords),
-                        max(y_coords),
-                    ]
-                except Exception:
-                    continue
+    kw_lower = [k.lower() for k in keywords]
+    for ann in text_annotations[1:]:
+        cleaned = ann.description.lower().strip(".,:")
+        if not any(kw in cleaned for kw in kw_lower):
+            continue
+        poly = ann.bounding_poly
+        if not poly or not poly.vertices:
+            continue
+        try:
+            xs = [v.x for v in poly.vertices]
+            ys = [v.y for v in poly.vertices]
+            if xs and ys:
+                return [min(xs), min(ys), max(xs), max(ys)]
+        except Exception:
+            continue
     return None

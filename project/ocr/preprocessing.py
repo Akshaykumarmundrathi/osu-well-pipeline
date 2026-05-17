@@ -1,17 +1,13 @@
 from PIL import Image as PILImage, ImageEnhance
 
 
-def preprocess_image(image_path):
+def preprocess_image(pil_image: PILImage.Image) -> PILImage.Image:
     """
-    Convert the image (from file) to grayscale, increase contrast, and binarize it.
+    Grayscale → contrast boost → binarize.
+    Accepts a PIL image; returns a processed PIL image.
+    No disk I/O — safe for parallel workers.
     """
-    image = PILImage.open(image_path).convert("L")
-
-    enhancer = ImageEnhance.Contrast(image)
-    image = enhancer.enhance(2)  # Increase contrast
-
-    image = image.point(lambda x: 0 if x < 128 else 255, '1')  # Binarize
-
-    image.save("preprocessed_image.png")  # (Optional) for debugging
-
+    image = pil_image.convert("L")
+    image = ImageEnhance.Contrast(image).enhance(2.0)
+    image = image.point(lambda x: 0 if x < 128 else 255, "1")
     return image

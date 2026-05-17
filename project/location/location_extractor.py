@@ -1,21 +1,19 @@
 """
 Location (Section / Township / Range) extraction pipeline.
 
-process_single_location(manager, output_dir, pdf_stem, logger) → dict
+process_single_location(manager, output_dir, pdf_stem, logger) -> dict
   {detected, page, section, township, range, raw_text, confidence,
    image_path, annotated_path}
 
-Scans all pages (expected ≤2), stops at first page with grouped STR keywords.
+Uses ONE Vision API call per page — keyword grouping and text extraction
+both reuse the same annotations, eliminating the previous double-call.
 """
 
-import io
 import logging
 import re
 from pathlib import Path
 
-from google.cloud import vision
-
-from config import LOCATION_KEYWORDS, RESOLUTION_MULTIPLIER
+from config import LOCATION_KEYWORDS
 from location.grouping import (
     choose_group,
     find_keywords_lists,
@@ -37,13 +35,26 @@ def _extract_str(raw: str) -> tuple[str, str, str]:
     )
 
 
-def _ocr_crop(crop) -> str:
-    buf = io.BytesIO()
-    crop.convert("RGB").save(buf, format="PNG")
-    client   = vision.ImageAnnotatorClient()
-    response = client.text_detection(image=vision.Image(content=buf.getvalue()))
-    texts    = response.text_annotations
-    return texts[0].description.strip() if texts else ""
+def _annotations_in_box(annotations, x0, y0, x1, y1) -> str:
+    """
+    Collect text tokens whose bounding-box centre falls within the crop region.
+    Avoids a second Vision API call on the crop image.
+    """
+    tokens = []
+    for ann in annotations[1:]:
+        poly = ann.bounding_poly
+        if not poly or not poly.vertices:
+            continue
+        try:
+            xs = [v.x for v in poly.vertices]
+            ys = [v.y for v in poly.vertices]
+            cx = sum(xs) / len(xs)
+            cy = sum(ys) / len(ys)
+            if x0 <= cx <= x1 and y0 <= cy <= y1:
+                tokens.append(ann.description)
+        except Exception:
+            continue
+    return " ".join(tokens)
 
 
 def process_single_location(
@@ -55,10 +66,6 @@ def process_single_location(
     padding_height: int = 50,
     section_right_extension: int = 200,
 ) -> dict:
-    """
-    Scans all pages for grouped Section/Township/Range keywords.
-    Crops and saves the region on first match.
-    """
     log = logger or logging.getLogger(__name__)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -71,6 +78,7 @@ def process_single_location(
 
     try:
         for page_num, pil_image in manager.iter_pil_pages():
+            # Single Vision API call — reused for keyword grouping and text
             annotations = detect_text_with_vision(pil_image)
             if not annotations:
                 continue
@@ -87,8 +95,10 @@ def process_single_location(
                 continue
 
             pw, ph = pil_image.size
-            x0, y0 = max(0, int(unified_box[0])), max(0, int(unified_box[1]))
-            x1, y1 = min(pw, int(unified_box[2])), min(ph, int(unified_box[3]))
+            x0 = max(0, int(unified_box[0]))
+            y0 = max(0, int(unified_box[1]))
+            x1 = min(pw, int(unified_box[2]))
+            y1 = min(ph, int(unified_box[3]))
             if x1 <= x0 or y1 <= y0:
                 continue
 
@@ -97,16 +107,20 @@ def process_single_location(
             crop_path = output_dir / f"{pdf_stem}_page_{page_num:02d}_location_crop.png"
             crop.save(str(crop_path))
 
-            ann_path  = output_dir / f"{pdf_stem}_page_{page_num:02d}_location_page.png"
+            ann_path = output_dir / f"{pdf_stem}_page_{page_num:02d}_location_page.png"
             annotate_page(pil_image, (x0, y0, x1, y1),
                           color="blue", label="STR").save(str(ann_path))
 
-            raw_text  = _ocr_crop(crop)
+            # Extract text from the already-fetched annotations within the crop box
+            raw_text = _annotations_in_box(annotations, x0, y0, x1, y1)
+            if not raw_text:
+                raw_text = annotations[0].description.strip() if annotations else ""
+
             sec, twp, rng = _extract_str(raw_text)
             found = sum(bool(v) for v in (sec, twp, rng))
             conf  = (found * 100) // 3
 
-            log.info("Location — page %d  sec=%s  twp=%s  rng=%s  conf=%d",
+            log.info("Location -- page %d  sec=%s  twp=%s  rng=%s  conf=%d",
                      page_num, sec, twp, rng, conf)
             result.update(
                 detected=True, page=page_num,

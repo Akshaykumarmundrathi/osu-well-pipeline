@@ -1,33 +1,31 @@
 """
-Oklahoma Well Records — Extraction Pipeline
+Oklahoma Well Records -- Extraction Pipeline
 
 Usage:
-    python main.py                         # full run from dataset_index.csv
-    python main.py --flat ..\pdfs          # flat folder (testing)
-    python main.py --pdf ..\pdfs\file.pdf  # single file
-    python main.py --stage grid            # one stage only
-    python main.py --resume                # skip already-done records (default on)
-    python main.py --limit 10              # first N records
-    python main.py --status                # print progress and exit
-    python main.py --scan                  # (re-)scan source ZIPs first, then run
+    python main.py --scan --source D:\\ --output D:\\project_outputs
+    python main.py --output D:\\project_outputs          # resume
+    python main.py --flat ..\\pdfs --output D:\\project_outputs_test
+    python main.py --stage grid --output D:\\project_outputs
+    python main.py --pdf ..\\pdfs\\file.pdf --output D:\\project_outputs_test
+    python main.py --status --output D:\\project_outputs
+    python main.py --limit 10 --flat ..\\pdfs --output D:\\project_outputs_test
 
-Output mirrors input hierarchy:
-    D:\\project_outputs\\
-    ├-- processing_status.csv
-    ├-- grids\\ExportedFolderContents_1\\{year}\\{month}\\{stem}\\
-    ├-- locations\\...
-    ├-- counties\\...
-    ├-- metadata\\...\\metadata.json
-    └-- logs\\...\\{stem}.log
+Processing order:
+  Records are grouped by (collection, year, month).
+  After each month completes, failed records in that month are retried once.
+  After each year completes, remaining failures in that year are retried once.
+  A final summary.csv with all fields is written at the end.
 """
 
 import argparse
+import atexit
 import csv
 import json
 import logging
 import sys
 import time
 from datetime import datetime, timezone
+from itertools import groupby
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -46,14 +44,19 @@ from utils.zip_reader import get_pdf_bytes
 
 log = get_logger(__name__)
 
+_SUMMARY_FIELDS = [
+    "pdf_path", "pdf_stem", "collection", "year", "month",
+    "grid_found", "grid_page", "grid_method", "grid_confidence",
+    "location_found", "section", "township", "range", "location_confidence",
+    "county_found", "county_name", "county_score", "county_confidence",
+    "all_success",
+    "grid_status", "location_status", "county_status",
+]
+
 
 # -- PDF source resolution -----------------------------------------------------
 
 def _make_manager(record: DatasetRecord) -> PDFDocumentManager:
-    """
-    Returns a PDFDocumentManager for the record.
-    Reads from ZIP bytes if record.zip_path is set; otherwise uses file path.
-    """
     if record.zip_path:
         pdf_bytes = get_pdf_bytes(record.zip_path, record.internal_path)
         return PDFDocumentManager(pdf_bytes=pdf_bytes,
@@ -62,7 +65,7 @@ def _make_manager(record: DatasetRecord) -> PDFDocumentManager:
                               resolution_multiplier=RESOLUTION_MULTIPLIER)
 
 
-# -- Metadata writer -----------------------------------------------------------
+# -- Writers -------------------------------------------------------------------
 
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
@@ -99,6 +102,44 @@ def _append_failed(record: DatasetRecord, stage: str, error: str):
         w.writerow([record.pdf_stem, record.pdf_path, stage, error, _now()])
 
 
+def write_summary_csv(status: ProcessingStatus, output_path: Path):
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    count = 0
+    with output_path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=_SUMMARY_FIELDS, extrasaction="ignore")
+        writer.writeheader()
+        for row in status._rows.values():
+            g = row.get("grid_status")     == DONE
+            l = row.get("location_status") == DONE
+            c = row.get("county_status")   == DONE
+            writer.writerow({
+                "pdf_path":            row.get("pdf_path", ""),
+                "pdf_stem":            row.get("pdf_stem", ""),
+                "collection":          row.get("collection", ""),
+                "year":                row.get("year", ""),
+                "month":               row.get("month", ""),
+                "grid_found":          g,
+                "grid_page":           row.get("grid_page", ""),
+                "grid_method":         row.get("grid_method", ""),
+                "grid_confidence":     row.get("grid_confidence", ""),
+                "location_found":      l,
+                "section":             row.get("location_section", ""),
+                "township":            row.get("location_township", ""),
+                "range":               row.get("location_range", ""),
+                "location_confidence": row.get("location_confidence", ""),
+                "county_found":        c,
+                "county_name":         row.get("county_name", ""),
+                "county_score":        row.get("county_score", ""),
+                "county_confidence":   row.get("county_confidence", ""),
+                "all_success":         g and l and c,
+                "grid_status":         row.get("grid_status", ""),
+                "location_status":     row.get("location_status", ""),
+                "county_status":       row.get("county_status", ""),
+            })
+            count += 1
+    log.info("Summary CSV -> %s  (%d rows)", output_path, count)
+
+
 # -- Per-record processing -----------------------------------------------------
 
 def run_one_record(
@@ -112,7 +153,6 @@ def run_one_record(
     pdf_log.info("=== START %s ===", record.pdf_stem)
     pdf_log.info("source: %s", record.pdf_path)
 
-    # Load PDF once — shared across all stages
     try:
         manager = _make_manager(record)
         pages   = manager.page_count()
@@ -133,7 +173,7 @@ def run_one_record(
 
     for stage in stages:
         if resume and status.is_done(record.pdf_stem, stage):
-            pdf_log.info("[%s] already done — skip", stage.upper())
+            pdf_log.info("[%s] already done -- skip", stage.upper())
             continue
 
         pdf_log.info("[%s] starting", stage.upper())
@@ -155,9 +195,7 @@ def run_one_record(
             status.mark_failed(record.pdf_stem, stage, r["error"])
             _append_failed(record, stage, r["error"])
         else:
-            detail = r.get("name") or f"page={r.get('page')}"
-            status.mark_done(record.pdf_stem, stage,
-                             r.get("confidence", 0), str(detail))
+            status.mark_done(record.pdf_stem, stage, r)
 
     if results:
         mp = write_metadata(record, results, paths)
@@ -184,6 +222,29 @@ def _dispatch(stage: str, manager: PDFDocumentManager,
     raise ValueError(f"Unknown stage: {stage}")
 
 
+# -- Retry helpers -------------------------------------------------------------
+
+def _retry_failed(
+    records: list,
+    stages: tuple,
+    paths: OutputPathBuilder,
+    status: ProcessingStatus,
+    label: str = "",
+):
+    stems    = [r.pdf_stem for r in records]
+    failed   = status.failed_in(stems, stages)
+    if not failed:
+        return
+    failed_set = set(failed)
+    to_retry   = [r for r in records if r.pdf_stem in failed_set]
+    log.info("Retry%s: %d failed records",
+             f" [{label}]" if label else "", len(to_retry))
+    for record in to_retry:
+        log.info("  retrying %s", record.pdf_stem)
+        run_one_record(record, stages, paths, status, resume=True)
+    status.force_save()
+
+
 # -- Pipeline runner -----------------------------------------------------------
 
 def run_pipeline(args):
@@ -192,6 +253,9 @@ def run_pipeline(args):
 
     paths  = OutputPathBuilder(output_root)
     status = ProcessingStatus(output_root / "processing_status.csv")
+
+    # Always flush on exit (handles Ctrl-C and crashes)
+    atexit.register(status.force_save)
 
     # -- Source records --------------------------------------------------------
     if args.pdf:
@@ -209,7 +273,7 @@ def run_pipeline(args):
         else:
             records = load_index(Path(args.index))
             if not records:
-                log.error("No records — run with --scan first or point --index at CSV")
+                log.error("No records -- run with --scan first or --index at CSV")
                 sys.exit(1)
         log.info("Loaded %d records", len(records))
 
@@ -219,52 +283,104 @@ def run_pipeline(args):
     stages = (args.stage,) if args.stage else ALL_STAGES
     log.info("stages=%s  resume=%s  records=%d", stages, args.resume, len(records))
 
-    # -- Init status -----------------------------------------------------------
+    # Init status rows (no-op for already-known records)
     for r in records:
         status.init_record(r.pdf_stem, r.pdf_path,
                            r.collection, r.year, r.month)
-    status.save()
+    status.force_save()
+
+    # -- Group by (collection, year, month) ------------------------------------
+    def _key(r: DatasetRecord):
+        return (r.collection or "", r.year or "", r.month or "")
+
+    sorted_records = sorted(records, key=_key)
+    month_groups   = [(k, list(g)) for k, g in groupby(sorted_records, key=_key)]
+    if not month_groups:
+        month_groups = [(("", "", ""), records)]
 
     # -- Main loop -------------------------------------------------------------
-    done = failed = skipped = 0
+    total_done = total_failed = total_skipped = 0
+    record_num = 0
+    year_group_records: list = []
+    prev_year_key: tuple | None = None
 
-    for i, record in enumerate(records, 1):
-        if args.resume and all(status.is_done(record.pdf_stem, s) for s in stages):
-            skipped += 1
-            continue
+    for (collection, year, month), month_recs in month_groups:
+        cur_year_key = (collection, year)
 
-        log.info("[%d/%d] %s", i, len(records), record.pdf_stem)
+        if prev_year_key and cur_year_key != prev_year_key:
+            _retry_failed(year_group_records, stages, paths, status,
+                          label=f"{prev_year_key[0]}/{prev_year_key[1]}")
+            year_group_records = []
 
-        try:
-            results = run_one_record(record, stages, paths, status,
-                                     resume=args.resume)
-            any_failed = any(
-                r.get("error") and not r.get("detected")
-                for r in results.values()
-            )
-            failed += int(any_failed)
-            done   += int(not any_failed)
-        except Exception as exc:
-            log.error("Fatal on %s: %s", record.pdf_stem, exc, exc_info=True)
-            for s in stages:
-                status.mark_failed(record.pdf_stem, s, str(exc))
-            _append_failed(record, "pipeline", str(exc))
-            failed += 1
+        log.info("--- %s / %s / %s  (%d records) ---",
+                 collection or "cli", year or "-", month or "-", len(month_recs))
 
-    # -- Summary ---------------------------------------------------------------
+        month_done = month_failed = month_skipped = 0
+
+        for record in month_recs:
+            record_num += 1
+
+            if args.resume and all(status.is_done(record.pdf_stem, s) for s in stages):
+                month_skipped += 1
+                total_skipped += 1
+                continue
+
+            log.info("[%d/%d] %s", record_num, len(records), record.pdf_stem)
+
+            try:
+                results = run_one_record(record, stages, paths, status,
+                                         resume=args.resume)
+                any_failed = any(
+                    r.get("error") and not r.get("detected")
+                    for r in results.values()
+                )
+                if any_failed:
+                    month_failed += 1
+                    total_failed += 1
+                else:
+                    month_done   += 1
+                    total_done   += 1
+            except Exception as exc:
+                log.error("Fatal on %s: %s", record.pdf_stem, exc, exc_info=True)
+                for s in stages:
+                    status.mark_failed(record.pdf_stem, s, str(exc))
+                _append_failed(record, "pipeline", str(exc))
+                month_failed += 1
+                total_failed += 1
+
+        log.info("Month done=%d  failed=%d  skipped=%d",
+                 month_done, month_failed, month_skipped)
+
+        status.force_save()
+        _retry_failed(month_recs, stages, paths, status,
+                      label=f"{collection}/{year}/{month}")
+
+        year_group_records.extend(month_recs)
+        prev_year_key = cur_year_key
+
+    # Final year retry
+    if year_group_records:
+        _retry_failed(year_group_records, stages, paths, status,
+                      label=f"{prev_year_key[0]}/{prev_year_key[1]}")
+
+    # -- Final flush + summary -------------------------------------------------
+    status.force_save()
+
     counts = status.counts()
     log.info("-" * 55)
-    log.info("done=%d  failed=%d  skipped=%d", done, failed, skipped)
+    log.info("done=%d  failed=%d  skipped=%d", total_done, total_failed, total_skipped)
     for s in ALL_STAGES:
         c = counts.get(s, {})
         log.info("  %-10s done=%-5d failed=%-5d pending=%d",
                  s, c.get(DONE, 0), c.get(FAILED, 0), c.get("pending", 0))
 
+    write_summary_csv(status, output_root / "summary.csv")
+
 
 def print_status(status_csv: Path):
     s = ProcessingStatus(status_csv)
     c = s.counts()
-    print(f"\nStatus — {status_csv}  ({len(s._rows)} records)\n")
+    print(f"\nStatus -- {status_csv}  ({len(s._rows)} records)\n")
     for stage in ALL_STAGES:
         sc = c.get(stage, {})
         print(f"  {stage:<10}  done={sc.get(DONE,0):<6} "

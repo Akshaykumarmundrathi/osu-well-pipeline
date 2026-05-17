@@ -46,8 +46,12 @@ _SUMMARY_FIELDS = [
     "grid_found", "grid_page", "grid_method", "grid_confidence",
     "location_found", "section", "township", "range", "location_confidence",
     "county_found", "county_name", "county_score", "county_confidence",
-    "all_success",
+    "final_status",      # 'success' | 'review' | 'failed'
+    "needs_review",      # True if any field below review threshold
+    "review_reasons",    # semicolon-joined list of weak signals
     "latlong_status", "grid_status", "location_status", "county_status",
+    "latlong_error_type", "grid_error_type",
+    "location_error_type", "county_error_type",
 ]
 
 _LATLONG_FIELDS = [
@@ -258,57 +262,141 @@ def _append_failed(record: DatasetRecord, stage: str, error: str):
         w.writerow([record.pdf_stem, record.pdf_path, stage, error, _now()])
 
 
-def write_summary_csv(status: ProcessingStatus, output_path: Path):
+def _int_or_zero(v) -> int:
+    """Best-effort int conversion for confidence/score fields stored as strings."""
+    try:
+        return int(float(v)) if v not in ("", None) else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def _classify_record(row: dict) -> tuple[str, list[str]]:
     """
-    Materialize the full per-record summary CSV from the in-memory status
-    rows. `all_success` is True when the record has either lat/lon OR
-    (grid AND location), plus a county match.
+    Decide each record's terminal state. Returns (final_status, review_reasons).
+
+    final_status:
+      'success' -- county detected with high score AND (lat/lon OR grid+location
+                   high confidence); no field below review threshold
+      'review'  -- success criteria met but at least one field is weak
+                   (low confidence / low score) and warrants a human check
+      'failed'  -- success criteria NOT met (county missing, or neither
+                   coords nor full grid+location)
     """
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    count = 0
-    with output_path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=_SUMMARY_FIELDS, extrasaction="ignore")
-        writer.writeheader()
+    from config import (
+        COUNTY_REVIEW_BELOW, GRID_REVIEW_BELOW, LOCATION_REVIEW_BELOW,
+    )
+
+    ll_found     = bool(row.get("latlong_lat")) and bool(row.get("latlong_lon"))
+    grid_done    = row.get("grid_status")     == DONE
+    loc_done     = row.get("location_status") == DONE
+    county_done  = row.get("county_status")   == DONE
+
+    county_score = _int_or_zero(row.get("county_score"))
+    grid_conf    = _int_or_zero(row.get("grid_confidence"))
+    loc_conf     = _int_or_zero(row.get("location_confidence"))
+    ll_conf      = _int_or_zero(row.get("latlong_confidence"))
+
+    # Success requires county AND (coords OR (grid AND location)).
+    has_geo = ll_found or (grid_done and loc_done)
+    if not (county_done and has_geo):
+        return "failed", []
+
+    reasons: list[str] = []
+    if county_score < COUNTY_REVIEW_BELOW:
+        reasons.append(f"county_score={county_score}<{COUNTY_REVIEW_BELOW}")
+    if grid_done and grid_conf < GRID_REVIEW_BELOW:
+        reasons.append(f"grid_conf={grid_conf}<{GRID_REVIEW_BELOW}")
+    if loc_done and loc_conf < LOCATION_REVIEW_BELOW:
+        reasons.append(f"location_conf={loc_conf}<{LOCATION_REVIEW_BELOW}")
+    if ll_found and ll_conf and ll_conf < 80:
+        reasons.append(f"latlong_conf={ll_conf}<80")
+
+    return ("review" if reasons else "success"), reasons
+
+
+def _row_to_summary_dict(row: dict, final_status: str,
+                        reasons: list[str]) -> dict:
+    """Flatten a status row to the summary CSV schema."""
+    stem = row.get("pdf_stem", "")
+    ll   = bool(row.get("latlong_lat")) and bool(row.get("latlong_lon"))
+    return {
+        "pdf_path":            row.get("pdf_path", ""),
+        "pdf_stem":            stem,
+        "collection":          row.get("collection", ""),
+        "year":                row.get("year", ""),
+        "month":               row.get("month", ""),
+        "latlong_found":       ll,
+        "lat":                 row.get("latlong_lat", ""),
+        "lon":                 row.get("latlong_lon", ""),
+        "latlong_confidence":  row.get("latlong_confidence", ""),
+        "latlong_page":        row.get("latlong_page", ""),
+        "well_name":           _well_name_from_stem(stem),
+        "well_type":           row.get("latlong_well_type", ""),
+        "grid_found":          row.get("grid_status")     == DONE,
+        "grid_page":           row.get("grid_page", ""),
+        "grid_method":         row.get("grid_method", ""),
+        "grid_confidence":     row.get("grid_confidence", ""),
+        "location_found":      row.get("location_status") == DONE,
+        "section":             row.get("location_section", ""),
+        "township":            row.get("location_township", ""),
+        "range":               row.get("location_range", ""),
+        "location_confidence": row.get("location_confidence", ""),
+        "county_found":        row.get("county_status")   == DONE,
+        "county_name":         row.get("county_name", ""),
+        "county_score":        row.get("county_score", ""),
+        "county_confidence":   row.get("county_confidence", ""),
+        "final_status":        final_status,
+        "needs_review":        final_status == "review",
+        "review_reasons":      "; ".join(reasons),
+        "latlong_status":      row.get("latlong_status", ""),
+        "grid_status":         row.get("grid_status", ""),
+        "location_status":     row.get("location_status", ""),
+        "county_status":       row.get("county_status", ""),
+        "latlong_error_type":  row.get("latlong_error_type", ""),
+        "grid_error_type":     row.get("grid_error_type", ""),
+        "location_error_type": row.get("location_error_type", ""),
+        "county_error_type":   row.get("county_error_type", ""),
+    }
+
+
+def write_summary_csvs(status: ProcessingStatus, output_root: Path):
+    """
+    Write the two terminal CSVs. Every record lands in EXACTLY ONE of them:
+      - <output>/success.csv  (final_status in {'success', 'review'})
+      - <output>/manual_review/failed.csv  (final_status == 'failed')
+
+    'review' rows live in success.csv with `needs_review=True` and a
+    `review_reasons` column listing what triggered the flag — so they
+    aren't duplicated to the failed file.
+    """
+    from config import MANUAL_REVIEW_DIR
+
+    success_path = output_root / "success.csv"
+    failed_path  = MANUAL_REVIEW_DIR / "failed.csv"
+    failed_path.parent.mkdir(parents=True, exist_ok=True)
+
+    n_success = n_review = n_failed = 0
+    with success_path.open("w", newline="", encoding="utf-8") as fs, \
+         failed_path.open("w", newline="", encoding="utf-8") as ff:
+        ws = csv.DictWriter(fs, fieldnames=_SUMMARY_FIELDS, extrasaction="ignore")
+        wf = csv.DictWriter(ff, fieldnames=_SUMMARY_FIELDS, extrasaction="ignore")
+        ws.writeheader()
+        wf.writeheader()
+
         for row in status._rows.values():
-            stem = row.get("pdf_stem", "")
-            ll   = bool(row.get("latlong_lat")) and bool(row.get("latlong_lon"))
-            g    = row.get("grid_status")     == DONE
-            l    = row.get("location_status") == DONE
-            c    = row.get("county_status")   == DONE
-            writer.writerow({
-                "pdf_path":            row.get("pdf_path", ""),
-                "pdf_stem":            stem,
-                "collection":          row.get("collection", ""),
-                "year":                row.get("year", ""),
-                "month":               row.get("month", ""),
-                "latlong_found":       ll,
-                "lat":                 row.get("latlong_lat", ""),
-                "lon":                 row.get("latlong_lon", ""),
-                "latlong_confidence":  row.get("latlong_confidence", ""),
-                "latlong_page":        row.get("latlong_page", ""),
-                "well_name":           _well_name_from_stem(stem),
-                "well_type":           row.get("latlong_well_type", ""),
-                "grid_found":          g,
-                "grid_page":           row.get("grid_page", ""),
-                "grid_method":         row.get("grid_method", ""),
-                "grid_confidence":     row.get("grid_confidence", ""),
-                "location_found":      l,
-                "section":             row.get("location_section", ""),
-                "township":            row.get("location_township", ""),
-                "range":               row.get("location_range", ""),
-                "location_confidence": row.get("location_confidence", ""),
-                "county_found":        c,
-                "county_name":         row.get("county_name", ""),
-                "county_score":        row.get("county_score", ""),
-                "county_confidence":   row.get("county_confidence", ""),
-                "all_success":         (ll or (g and l)) and c,
-                "latlong_status":      row.get("latlong_status", ""),
-                "grid_status":         row.get("grid_status", ""),
-                "location_status":     row.get("location_status", ""),
-                "county_status":       row.get("county_status", ""),
-            })
-            count += 1
-    _p(f"  Summary CSV written  ({count:,} rows)  ->  {output_path}")
+            final_status, reasons = _classify_record(row)
+            out = _row_to_summary_dict(row, final_status, reasons)
+            if final_status == "failed":
+                wf.writerow(out); n_failed += 1
+            else:
+                ws.writerow(out)
+                if final_status == "review":
+                    n_review += 1
+                else:
+                    n_success += 1
+
+    _p(f"  success.csv  ({n_success:,} clean + {n_review:,} for review)  -> {success_path}")
+    _p(f"  failed.csv   ({n_failed:,} records)                            -> {failed_path}")
 
 
 def write_latlong_csv(status: ProcessingStatus, output_path: Path):
@@ -786,7 +874,7 @@ def run_pipeline(args):
            f"pending={c.get('pending',0):,}")
 
     _p()
-    write_summary_csv(status, output_root / "summary.csv")
+    write_summary_csvs(status, output_root)
     write_latlong_csv(status, output_root / "latlong_records.csv")
 
 

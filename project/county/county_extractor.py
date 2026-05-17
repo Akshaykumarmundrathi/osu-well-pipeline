@@ -92,11 +92,15 @@ def _gemini_call(model, cfg, prompt: str, pil_image) -> str:
 # -- Structural anchor (zero-cost county detection) ----------------------------
 
 def _tokens_left_of(annotations, kw_box, max_tokens: int = 4,
-                    same_line_tol: int = 25) -> str:
+                    same_line_tol: int = 35) -> str:
     """
     Return the text of up to `max_tokens` annotation tokens that sit
     immediately to the LEFT of `kw_box` and share its vertical band
     (within +/- same_line_tol pixels of the keyword's y-centre).
+
+    Vertical tolerance is generous (35 px) to catch cursive / handwritten
+    county names that wobble slightly off the baseline of the printed
+    "County" keyword.
     """
     if kw_box is None or not annotations:
         return ""

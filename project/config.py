@@ -98,8 +98,16 @@ COUNTY_MAP_CLEAN_TO_ORIGINAL = {
 }
 
 # -- Thresholds ----------------------------------------------------------------
-FUZZY_MATCH_THRESHOLD      = 86
-RETRY_CONFIDENCE_THRESHOLD = 95
+# County fuzzy-match: accept matches above ACCEPT, but flag for manual review
+# anything below REVIEW. Cursive / handwritten county names produce noisy OCR
+# that won't clear 86 — lowering the floor lets them through, then the review
+# flag asks a human to confirm.
+FUZZY_MATCH_THRESHOLD      = 72   # minimum score to record as detected
+RETRY_CONFIDENCE_THRESHOLD = 95   # auto-accept on Pass 1 if >= this
+
+COUNTY_REVIEW_BELOW        = 86   # county_score < this -> needs_review
+GRID_REVIEW_BELOW          = 80   # grid_confidence < this -> needs_review
+LOCATION_REVIEW_BELOW      = 100  # any missing field (sec/twp/rng) -> needs_review
 
 # -- Per-stage page caps -------------------------------------------------------
 # First-pass page limits (kept small to control API cost). Retry path uses

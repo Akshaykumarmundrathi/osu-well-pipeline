@@ -4,13 +4,24 @@ Grid extraction pipeline.
 process_single_grid(manager, output_dir, pdf_stem, logger, relaxed=False) -> dict
   {detected, page, bbox, method, confidence, image_path, error?}
 
-Two-pass strategy:
-  - First call uses the strict size band (GRID_W/H_STRICT). Iterates pages
-    in reverse (grid is virtually always on the back page of well-record
-    forms). Returns on the first detected page.
-  - Retry call (`relaxed=True`) widens the size band to GRID_W/H_LOOSE
-    and tries ALL pages forward, catching grids that fall outside the
-    common size range.
+Strategy
+--------
+Each page is tried in this order:
+
+  1. **Structural anchor**: OCR the page (Vision API; cached on the
+     manager), look for one of the printed phrases that always sits
+     beside the STR grid ('spot well located' / 'Locate Well' /
+     'Locate Well correctly'). When found, crop a fixed region above
+     or below the anchor and run the CV extractors on the crop. This
+     succeeds even when the grid's overall size is unusual, because
+     we've already isolated its location.
+
+  2. **Full-page CV** (current fallback): run all six extractors on
+     the entire page image and pick the best 4-vertex candidate.
+
+Pages are iterated in REVERSE for `relaxed=False` (grid is usually on
+the back page of well-record sheets) and FORWARD for `relaxed=True`
+(retry path, looser size band).
 """
 
 import logging
@@ -22,6 +33,7 @@ from config import (
     GRID_H_LOOSE, GRID_H_STRICT,
     GRID_W_LOOSE, GRID_W_STRICT,
 )
+from grid.anchors import crop_box_from_anchor, find_grid_anchor
 from grid.extractors import (
     extract_grid_region_adaptive,
     extract_grid_region_canny,
@@ -31,6 +43,7 @@ from grid.extractors import (
     extract_grid_region_rotated,
 )
 from grid.filters import is_valid_candidate
+from ocr.vision_api import get_page_annotations
 from pdf.pdf_manager import PDFDocumentManager
 
 _METHODS = [
@@ -47,10 +60,10 @@ _AR_MIN, _AR_MAX = 0.85, 1.15   # square-ish aspect ratio
 
 def _extract_best_candidate(cv_image, w_min, w_max, h_min, h_max):
     """
-    Run all six extractors against `cv_image`. Among returned candidates,
-    pick the one with the largest area satisfying the aspect-ratio band
-    and the supplied (w_min..w_max, h_min..h_max) constraints.
-    Returns (grid_img, bbox, method_name) or (None, None, None).
+    Run all six CV extractors against `cv_image`. Keep candidates whose
+    width/height fall in [w_min..w_max] x [h_min..h_max] and whose aspect
+    ratio is roughly square. Return the largest such candidate as
+    (grid_img, (x, y, w, h), method_name) or (None, None, None).
     """
     candidates = []
     for func in _METHODS:
@@ -79,9 +92,51 @@ def _extract_best_candidate(cv_image, w_min, w_max, h_min, h_max):
 
 def extract_grid_region_combined(cv_image):
     """Strict-band convenience wrapper (kept for backward compatibility)."""
-    return _extract_best_candidate(
-        cv_image, *GRID_W_STRICT, *GRID_H_STRICT,
+    return _extract_best_candidate(cv_image, *GRID_W_STRICT, *GRID_H_STRICT)
+
+
+def _try_anchor_on_page(manager, page_num_1indexed, cv_img,
+                        w_min, w_max, h_min, h_max, log):
+    """
+    Try the structural-anchor strategy on a single page.
+
+    Returns (grid_img, full_page_bbox, method_label) or (None, None, None).
+    `method_label` is prefixed with 'anchor_<position>_' so the summary
+    CSV can tell anchor hits apart from full-page CV hits.
+    """
+    try:
+        annotations, _ = get_page_annotations(
+            manager=manager, page_num=page_num_1indexed - 1,
+        )
+    except Exception as exc:
+        log.debug("Anchor OCR failed page %d: %s", page_num_1indexed, exc)
+        return None, None, None
+    if not annotations:
+        return None, None, None
+
+    anchor_bbox, pos, phrase = find_grid_anchor(annotations)
+    if anchor_bbox is None:
+        return None, None, None
+
+    ph, pw = cv_img.shape[:2]
+    crop_box = crop_box_from_anchor(anchor_bbox, pos, pw, ph)
+    if crop_box is None:
+        return None, None, None
+
+    cx0, cy0, cx1, cy1 = crop_box
+    region = cv_img[cy0:cy1, cx0:cx1]
+    grid_img, bbox, method = _extract_best_candidate(
+        region, w_min, w_max, h_min, h_max,
     )
+    if grid_img is None:
+        return None, None, None
+
+    # Translate the bbox back into full-page coordinates.
+    bx, by, bw, bh = bbox
+    full_bbox = (bx + cx0, by + cy0, bw, bh)
+    log.info("Grid via anchor %r on page %d (%s of anchor)",
+             phrase, page_num_1indexed, pos)
+    return grid_img, full_bbox, f"anchor_{pos}_{method}"
 
 
 def process_single_grid(
@@ -94,10 +149,13 @@ def process_single_grid(
     """
     Detect the section-township-range grid box on one of the PDF's pages.
 
-    `relaxed=False` (default): strict size band, iterate pages REVERSED
-      so 2-page docs (grid on back page) hit on the first try.
-    `relaxed=True` (retry path): loose size band, iterate pages FORWARD
-      so out-of-range grids on early pages are caught.
+    `relaxed=False` -- strict size band, REVERSE page order (back-page first).
+    `relaxed=True`  -- loose size band, FORWARD page order. Used by the
+                       retry path so out-of-range grids on early pages are
+                       still caught.
+
+    Each page is tried first with the structural anchor; on failure, the
+    full-page CV extractors run as a fallback.
     """
     log = logger or logging.getLogger(__name__)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -105,12 +163,12 @@ def process_single_grid(
     if relaxed:
         w_min, w_max = GRID_W_LOOSE
         h_min, h_max = GRID_H_LOOSE
-        page_order   = lambda pages: pages          # forward
+        page_order   = lambda pages: pages
         mode         = "loose"
     else:
         w_min, w_max = GRID_W_STRICT
         h_min, h_max = GRID_H_STRICT
-        page_order   = reversed                     # back-page first
+        page_order   = reversed
         mode         = "strict"
 
     result = {"detected": False, "page": None, "bbox": None,
@@ -119,9 +177,16 @@ def process_single_grid(
     try:
         pages = list(manager.iter_cv2_pages())
         for page_num, cv_img in page_order(pages):
-            grid_img, bbox, method = _extract_best_candidate(
-                cv_img, w_min, w_max, h_min, h_max,
+            # Strategy 1: structural anchor + crop.
+            grid_img, bbox, method = _try_anchor_on_page(
+                manager, page_num, cv_img, w_min, w_max, h_min, h_max, log,
             )
+
+            # Strategy 2: full-page CV scan (fallback).
+            if grid_img is None:
+                grid_img, bbox, method = _extract_best_candidate(
+                    cv_img, w_min, w_max, h_min, h_max,
+                )
             if grid_img is None:
                 log.debug("Page %d -- no grid (%s)", page_num, mode)
                 continue
@@ -145,8 +210,6 @@ def process_single_grid(
         result["error"] = str(exc)
         return result
 
-    # No grid found across all pages — flag as a retriable failure so the
-    # dispatcher knows to attempt the relaxed-band retry.
     log.warning("No grid detected (%s mode)", mode)
     result["error"] = "not_detected"
     return result

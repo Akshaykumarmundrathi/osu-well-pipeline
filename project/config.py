@@ -117,6 +117,12 @@ MAX_LATLONG_PAGES_RETRY  = 99      # scan everything on retry
 MAX_COUNTY_PAGES         = 2
 MAX_COUNTY_PAGES_RETRY   = 99
 
+# Collections numbered below this never run the latlong stage — manual
+# inspection of older ExportedFolderContents (N).zip archives confirms
+# decimal-degree coordinates were not yet recorded on the forms. Saves
+# one Vision API call per record (~50% of stage time for resume runs).
+LATLONG_MIN_COLLECTION_NUM = 11
+
 # -- Retry heuristics ----------------------------------------------------------
 # Crop multiplier used by the county no_match retry strategy.
 COUNTY_RETRY_CROP_SCALE  = 1.5

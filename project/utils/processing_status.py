@@ -65,6 +65,8 @@ def _classify_error(error: str) -> str:
         return "no_match"
     if "not_detected" in e or "no grid" in e:
         return "not_detected"
+    if "not_found" in e:
+        return "not_found"
     if "invalid_crop" in e:
         return "invalid_crop"
     return "exception"

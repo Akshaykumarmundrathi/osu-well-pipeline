@@ -170,7 +170,13 @@ def process_single_latlong(
     }
 
     try:
-        for page_num, pil_image in manager.iter_pil_pages():
+        # Lat/Lon labels are virtually always on cover/metadata page.
+        # Limit to first 2 pages — saves Vision API calls on 3+ page docs
+        # where coords are not present.
+        _MAX_PAGES = 2
+        for idx, (page_num, pil_image) in enumerate(manager.iter_pil_pages()):
+            if idx >= _MAX_PAGES:
+                break
             annotations = detect_text_with_vision(pil_image)
             if not annotations:
                 continue

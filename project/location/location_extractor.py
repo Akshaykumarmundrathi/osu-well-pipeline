@@ -24,15 +24,32 @@ from pdf.pdf_manager import PDFDocumentManager
 from utils.io_utils import annotate_page
 
 
+def _clean(v: str) -> str:
+    """Collapse whitespace/newlines and strip."""
+    return re.sub(r"\s+", "", v).strip() if v else ""
+
+
 def _extract_str(raw: str) -> tuple[str, str, str]:
-    sec = re.search(r"sec(?:tion)?\.?\s*(\d+)", raw, re.I)
-    twp = re.search(r"t(?:ownship|wn|vp|wp)\.?\s*([\d]+\s*[NS]?)", raw, re.I)
-    rng = re.search(r"r(?:ange|ge)\.?\s*([\d]+\s*[EW]?)", raw, re.I)
-    return (
-        sec.group(1).strip() if sec else "",
-        twp.group(1).strip() if twp else "",
-        rng.group(1).strip() if rng else "",
-    )
+    # Section: 1-2 digit number after sec/section
+    sec_m = re.search(r"sec(?:tion)?\.?\s*(\d{1,2})\b", raw, re.I)
+    # Township: digits followed by N/S (required; bare digits are too noisy)
+    twp_m = re.search(r"t(?:ownship|wn|vp|wp)\.?\s*(\d{1,3}\s*[NS])\b", raw, re.I)
+    # Range: digits followed by E/W (required)
+    rng_m = re.search(r"r(?:ange|ge)\.?\s*(\d{1,3}\s*[EW])\b", raw, re.I)
+
+    sec = _clean(sec_m.group(1)) if sec_m else ""
+    twp = _clean(twp_m.group(1)) if twp_m else ""
+    rng = _clean(rng_m.group(1)) if rng_m else ""
+
+    # Section sanity: 1..36 (PLSS sections)
+    if sec:
+        try:
+            n = int(sec)
+            if not (1 <= n <= 36):
+                sec = ""
+        except ValueError:
+            sec = ""
+    return sec, twp, rng
 
 
 def _annotations_in_box(annotations, x0, y0, x1, y1) -> str:
@@ -122,6 +139,11 @@ def process_single_location(
 
             log.info("Location -- page %d  sec=%s  twp=%s  rng=%s  conf=%d",
                      page_num, sec, twp, rng, conf)
+            # Require >=2 valid fields. Single-field hits are too noisy
+            # (often false positives from random numbers near keywords).
+            if found < 2:
+                continue   # try next page
+
             result.update(
                 detected=True, page=page_num,
                 section=sec, township=twp, range=rng,

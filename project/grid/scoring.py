@@ -1,7 +1,7 @@
 """
 Grid extraction pipeline.
 
-process_single_grid(manager, output_dir, logger) → dict
+process_single_grid(manager, output_dir, logger) -> dict
   {detected, page, bbox, method, confidence, image_path}
 
 For 2-page PDFs: scans every page, stops at first successful detection.
@@ -81,7 +81,10 @@ def process_single_grid(
               "method": None, "confidence": 0, "image_path": None}
 
     try:
-        for page_num, cv_img in manager.iter_cv2_pages():
+        # Grid is almost always on the LAST page (back of well-record sheet).
+        # Iterate in reverse so the common case hits on the first try.
+        pages = list(manager.iter_cv2_pages())
+        for page_num, cv_img in reversed(pages):
             grid_img, bbox, method = extract_grid_region_combined(cv_img)
             if grid_img is None:
                 log.debug("Page %d — no grid", page_num)

@@ -153,20 +153,27 @@ def _format_stage_result(stage: str, r: dict, elapsed: float) -> str:
 
 
 def _record_status_line(stages_run: dict, stages: tuple):
-    """Print a one-line OK / PARTIAL / FAILED summary after a record."""
-    failed   = [s for s in stages if stages_run.get(s, {}).get("error")
-                and not stages_run.get(s, {}).get("detected")]
+    """Print a one-line OK / PARTIAL / FAILED summary after a record.
+
+    Latlong is *optional*: only ~1% of docs have decimal coords, so
+    its absence is the normal case — never counted as PARTIAL/missing.
+    """
+    failed   = [s for s in stages if isinstance(stages_run.get(s), dict)
+                and stages_run[s].get("error")
+                and not stages_run[s].get("detected")]
     skipped  = [s for s in stages if stages_run.get(s) == SKIPPED]
-    detected = [s for s in stages if stages_run.get(s, {}).get("detected")]
+    core     = [s for s in stages
+                if s != STAGE_LATLONG and s not in skipped]
+    missing  = [s for s in core
+                if not (isinstance(stages_run.get(s), dict)
+                        and stages_run[s].get("detected"))]
 
     if failed:
         tag = f"FAILED  ({', '.join(failed)})"
-    elif len(detected) == len([s for s in stages if s not in skipped]):
-        tag = "OK  (all stages detected)"
+    elif not missing:
+        tag = "OK"
     else:
-        missing = [s for s in stages if s not in skipped
-                   and not stages_run.get(s, {}).get("detected")]
-        tag = f"PARTIAL  (not found: {', '.join(missing)})" if missing else "OK"
+        tag = f"PARTIAL  (not found: {', '.join(missing)})"
 
     _p(f"  {'':>{_COL}}{tag}")
 
@@ -438,6 +445,9 @@ def _dispatch(stage: str, manager: PDFDocumentManager,
 
 # -- Retry helpers -------------------------------------------------------------
 
+_RETRIED: set[str] = set()           # stems already retried this run
+
+
 def _retry_failed(
     records: list,
     stages: tuple,
@@ -446,14 +456,25 @@ def _retry_failed(
     total: int,
     label: str = "",
 ):
+    """
+    Retry failed records ONCE per run. Skip records whose only failures
+    are deterministic (no_match / keyword_not_found) — same input + same
+    model = same result, retry is wasted ~10s/record.
+    """
     stems   = [r.pdf_stem for r in records]
     failed  = status.failed_in(stems, stages)
     if not failed:
         return
     failed_set = set(failed)
-    to_retry   = [r for r in records if r.pdf_stem in failed_set]
+    to_retry   = [
+        r for r in records
+        if r.pdf_stem in failed_set and r.pdf_stem not in _RETRIED
+    ]
+    if not to_retry:
+        return
     _p(f"\n  Retrying {len(to_retry)} failed record(s)  [{label}]")
     for i, record in enumerate(to_retry, 1):
+        _RETRIED.add(record.pdf_stem)
         run_one_record(record, stages, paths, status, resume=True,
                        record_num=i, total=len(to_retry))
     status.force_save()

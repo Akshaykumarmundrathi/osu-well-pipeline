@@ -29,10 +29,16 @@ SAVE_INTERVAL = 25  # rewrite CSV after this many mark_done/mark_failed calls
 
 _FIELDNAMES = [
     "pdf_stem", "pdf_path", "collection", "year", "month",
-    "grid_status",     "grid_confidence",     "grid_page",    "grid_method",
+    # latlong (first stage)
+    "latlong_status", "latlong_confidence",
+    "latlong_lat", "latlong_lon", "latlong_well_type", "latlong_page",
+    # grid
+    "grid_status",     "grid_confidence",  "grid_page",    "grid_method",
+    # location
     "location_status", "location_confidence",
-    "location_section", "location_township",  "location_range",
-    "county_status",   "county_confidence",   "county_name",  "county_score",
+    "location_section", "location_township", "location_range",
+    # county
+    "county_status",   "county_confidence", "county_name",  "county_score",
     "last_updated",
 ]
 
@@ -83,6 +89,7 @@ class ProcessingStatus:
         row.update({
             "pdf_stem": pdf_stem, "pdf_path": pdf_path,
             "collection": collection, "year": year, "month": month,
+            "latlong_status":  PENDING,
             "grid_status":     PENDING,
             "location_status": PENDING,
             "county_status":   PENDING,
@@ -99,7 +106,14 @@ class ProcessingStatus:
         """
         confidence = str(result.get("confidence", 0))
         extra: dict = {}
-        if stage == "grid":
+        if stage == "latlong":
+            extra = {
+                "latlong_lat":       str(result.get("lat", "")),
+                "latlong_lon":       str(result.get("lon", "")),
+                "latlong_well_type": result.get("well_type", ""),
+                "latlong_page":      str(result.get("page", "")),
+            }
+        elif stage == "grid":
             extra = {
                 "grid_page":   str(result.get("page", "")),
                 "grid_method": result.get("method", ""),
@@ -130,6 +144,11 @@ class ProcessingStatus:
 
     def get_status(self, pdf_stem: str, stage: str) -> str:
         return self._rows.get(pdf_stem, {}).get(f"{stage}_status", PENDING)
+
+    def latlong_detected(self, pdf_stem: str) -> bool:
+        """True only if lat AND lon values are stored (means coordinates were found)."""
+        row = self._rows.get(pdf_stem, {})
+        return bool(row.get("latlong_lat")) and bool(row.get("latlong_lon"))
 
     def all_done(self, pdf_stem: str) -> bool:
         return all(self.is_done(pdf_stem, s) for s in ALL_STAGES)

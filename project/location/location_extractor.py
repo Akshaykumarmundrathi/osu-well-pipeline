@@ -30,12 +30,14 @@ def _clean(v: str) -> str:
 
 
 def _extract_str(raw: str) -> tuple[str, str, str]:
-    # Section: 1-2 digit number after sec/section
+    # Section: 1-2 digit number after sec/section (validated to 1..36 below).
     sec_m = re.search(r"sec(?:tion)?\.?\s*(\d{1,2})\b", raw, re.I)
-    # Township: digits followed by N/S (required; bare digits are too noisy)
-    twp_m = re.search(r"t(?:ownship|wn|vp|wp)\.?\s*(\d{1,3}\s*[NS])\b", raw, re.I)
-    # Range: digits followed by E/W (required)
-    rng_m = re.search(r"r(?:ange|ge)\.?\s*(\d{1,3}\s*[EW])\b", raw, re.I)
+    # Township: 1-3 digits, optional N/S suffix (OCR often loses the letter
+    # on old scans, so we keep it optional — false positives are filtered
+    # later by the ≥2-valid-fields rule).
+    twp_m = re.search(r"t(?:ownship|wn|vp|wp)\.?\s*(\d{1,3}(?:\s*[NS])?)", raw, re.I)
+    # Range: 1-3 digits, optional E/W suffix (same reasoning as township).
+    rng_m = re.search(r"r(?:ange|ge)\.?\s*(\d{1,3}(?:\s*[EW])?)", raw, re.I)
 
     sec = _clean(sec_m.group(1)) if sec_m else ""
     twp = _clean(twp_m.group(1)) if twp_m else ""

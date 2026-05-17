@@ -39,8 +39,8 @@ def find_keywords_lists(text_annotations, keywords, extend_right=400, padding_he
 
 def vertical_overlap(y1_min, y1_max, y2_min, y2_max):
     """
-    Computes the ratio of vertical overlap between two boxes.
-    Returns the overlap fraction (0 to 1).
+    Fractional vertical overlap between two y-ranges, normalised by the
+    smaller height. Returns 0..1 (0 if disjoint, 1 if one contains the other).
     """
     overlap = max(0, min(y1_max, y2_max) - max(y1_min, y2_min))
     height1 = y1_max - y1_min

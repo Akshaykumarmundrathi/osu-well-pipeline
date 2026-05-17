@@ -3,7 +3,7 @@ Helpers for reading PDFs that live inside ZIP archives.
 
 ZIP structure expected (variable depth, last 3 parts used):
     ExportedFolderContents (1).zip
-        └── [optional_prefix/] {year} / {month} / filename.pdf
+        └-- [optional_prefix/] {year} / {month} / filename.pdf
 """
 
 import re
@@ -54,5 +54,6 @@ def list_pdfs_in_zip(zip_path: Path) -> list[dict]:
 
 
 def _extract_collection_num(zip_name: str) -> int:
+    """Parse the trailing '(N)' from an ExportedFolderContents zip name."""
     m = re.search(r"\((\d+)\)", zip_name)
     return int(m.group(1)) if m else 0

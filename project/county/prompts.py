@@ -32,9 +32,9 @@ If nothing matches, respond ONLY with: Not detected."""
 
 def setup_gemini():
     """
-    Initialises Gemini Flash and Pro models.
-    Requires GOOGLE_API_KEY environment variable.
-    Returns (model_flash, model_pro, generation_config).
+    Initialise Gemini Flash and Pro models with deterministic generation
+    (temperature=0). Requires `GOOGLE_API_KEY` in the environment.
+    Returns the (flash_model, pro_model, generation_config) triple.
     """
     genai.configure()
     flash = genai.GenerativeModel(MODEL_FLASH_NAME)

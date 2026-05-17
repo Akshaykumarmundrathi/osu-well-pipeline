@@ -1,7 +1,7 @@
 """
 County extraction pipeline — two Gemini passes + fuzzy match.
 
-process_single_county(manager, output_dir, pdf_stem, logger) → dict
+process_single_county(manager, output_dir, pdf_stem, logger) -> dict
   {detected, page, name, pass1_result, pass2_result,
    fuzzy_score, confidence, image_path, annotated_path}
 
@@ -26,7 +26,7 @@ from ocr.vision_api import find_keyword_box, get_page_annotations
 from pdf.pdf_manager import PDFDocumentManager
 from utils.io_utils import annotate_page
 
-# ── Fuzzy match ───────────────────────────────────────────────────────────────
+# -- Fuzzy match ---------------------------------------------------------------
 
 try:
     from rapidfuzz import process as _rfuzz
@@ -54,7 +54,7 @@ except ImportError:
         return "", 0
 
 
-# ── Gemini singleton ──────────────────────────────────────────────────────────
+# -- Gemini singleton ----------------------------------------------------------
 
 _GEMINI = None
 
@@ -71,7 +71,7 @@ def _gemini_call(model, cfg, prompt: str, pil_image) -> str:
     return resp.text.strip() if resp.text else ""
 
 
-# ── Core logic ────────────────────────────────────────────────────────────────
+# -- Core logic ----------------------------------------------------------------
 
 def _try_page(
     manager: PDFDocumentManager,
@@ -128,7 +128,7 @@ def _try_page(
         "image_path": str(crop_path), "annotated_path": str(ann_path),
     }
 
-    # ── Gemini Pass 1 (Flash) ─────────────────────────────────────────────────
+    # -- Gemini Pass 1 (Flash) -------------------------------------------------
     try:
         flash, pro, cfg = _get_gemini()
 
@@ -144,7 +144,7 @@ def _try_page(
                                fuzzy_score=score, confidence=score)
                 return result, True
 
-        # ── Gemini Pass 2 (Pro) ───────────────────────────────────────────────
+        # -- Gemini Pass 2 (Pro) -----------------------------------------------
         raw2 = _gemini_call(pro, cfg, prompt_pass2, crop)
         result["pass2_result"] = raw2
         log.debug("Pass 2 raw: %r", raw2)

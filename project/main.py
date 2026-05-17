@@ -220,11 +220,21 @@ def _well_name_from_stem(pdf_stem: str) -> str:
 
 def _make_manager(record: DatasetRecord) -> PDFDocumentManager:
     """
-    Build a PDFDocumentManager for the record's source — either raw bytes
-    extracted from a ZIP entry, or a direct file path on disk.
+    Build a PDFDocumentManager for the record's source.
+
+    Routes the lookup based on `record.zip_path`:
+      - 's3://bucket/key' -> stream the ZIP from S3, extract the PDF
+      - any other non-empty path -> local ZIP file
+      - empty -> read the standalone PDF at `record.pdf_path`
     """
-    if record.zip_path:
-        pdf_bytes = get_pdf_bytes(record.zip_path, record.internal_path)
+    zp = record.zip_path or ""
+    if zp.startswith("s3://"):
+        from utils.s3_reader import get_pdf_bytes_s3
+        pdf_bytes = get_pdf_bytes_s3(zp, record.internal_path)
+        return PDFDocumentManager(pdf_bytes=pdf_bytes,
+                                  resolution_multiplier=RESOLUTION_MULTIPLIER)
+    if zp:
+        pdf_bytes = get_pdf_bytes(zp, record.internal_path)
         return PDFDocumentManager(pdf_bytes=pdf_bytes,
                                   resolution_multiplier=RESOLUTION_MULTIPLIER)
     return PDFDocumentManager(record.pdf_path,

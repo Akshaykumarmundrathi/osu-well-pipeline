@@ -26,6 +26,9 @@ class PDFDocumentManager:
         self.pdf_path              = str(pdf_path) if pdf_path else None
         self._bytes                = pdf_bytes
         self.resolution_multiplier = resolution_multiplier
+        # Per-record OCR cache: (page_num_0indexed) -> (annotations, pil_image).
+        # Stages running on the same record can read the same page once.
+        self._ocr_cache: dict[int, tuple] = {}
 
     # -- internal -------------------------------------------------------------
 

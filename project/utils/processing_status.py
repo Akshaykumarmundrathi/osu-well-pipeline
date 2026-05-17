@@ -30,15 +30,17 @@ SAVE_INTERVAL = 25  # rewrite CSV after this many mark_done/mark_failed calls
 _FIELDNAMES = [
     "pdf_stem", "pdf_path", "collection", "year", "month",
     # latlong (first stage)
-    "latlong_status", "latlong_confidence",
+    "latlong_status", "latlong_confidence", "latlong_error_type",
     "latlong_lat", "latlong_lon", "latlong_well_type", "latlong_page",
     # grid
-    "grid_status",     "grid_confidence",  "grid_page",    "grid_method",
+    "grid_status",     "grid_confidence",  "grid_error_type",
+    "grid_page",       "grid_method",
     # location
-    "location_status", "location_confidence",
+    "location_status", "location_confidence", "location_error_type",
     "location_section", "location_township", "location_range",
     # county
-    "county_status",   "county_confidence", "county_name",  "county_score",
+    "county_status",   "county_confidence", "county_error_type",
+    "county_name",     "county_score",
     "last_updated",
 ]
 
@@ -48,6 +50,24 @@ _EMPTY_ROW = {f: "" for f in _FIELDNAMES}
 def _now() -> str:
     """UTC timestamp string ('YYYY-MM-DDTHH:MM:SS')."""
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def _classify_error(error: str) -> str:
+    """Heuristically derive an error_type slug from a free-text error string."""
+    if not error:
+        return "unknown"
+    e = error.lower()
+    if "503" in e or "unavailable" in e or "socket" in e or "handshaker" in e:
+        return "api_error"
+    if "keyword_not_found" in e:
+        return "keyword_not_found"
+    if "no_match" in e:
+        return "no_match"
+    if "not_detected" in e or "no grid" in e:
+        return "not_detected"
+    if "invalid_crop" in e:
+        return "invalid_crop"
+    return "exception"
 
 
 class ProcessingStatus:
@@ -73,12 +93,31 @@ class ProcessingStatus:
                 self._rows[full["pdf_stem"]] = full
 
     def save(self):
-        """Rewrite the entire CSV from current in-memory rows."""
+        """
+        Rewrite the entire CSV from current in-memory rows.
+
+        Writes to a sibling .tmp file first, then renames over the
+        original — atomic on Windows/POSIX. Ctrl-C during the write
+        is deferred until after the rename so the on-disk file is
+        never half-written.
+        """
         self.csv_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.csv_path.open("w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=_FIELDNAMES, extrasaction="ignore")
-            writer.writeheader()
-            writer.writerows(self._rows.values())
+        tmp = self.csv_path.with_suffix(self.csv_path.suffix + ".tmp")
+        pending_interrupt = None
+        try:
+            with tmp.open("w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=_FIELDNAMES,
+                                        extrasaction="ignore")
+                writer.writeheader()
+                writer.writerows(self._rows.values())
+        except KeyboardInterrupt as exc:
+            # Finish writing before re-raising.
+            pending_interrupt = exc
+        try:
+            tmp.replace(self.csv_path)
+        finally:
+            if pending_interrupt is not None:
+                raise pending_interrupt
 
     def force_save(self):
         """Flush pending updates to disk; call at boundaries and process exit."""
@@ -138,9 +177,21 @@ class ProcessingStatus:
             }
         self._update(pdf_stem, stage, DONE, confidence, extra)
 
-    def mark_failed(self, pdf_stem: str, stage: str, error: str = ""):
-        """Mark stage FAILED. Error text is logged elsewhere (failed_records.csv)."""
-        self._update(pdf_stem, stage, FAILED, "", {})
+    def mark_failed(self, pdf_stem: str, stage: str, error: str = "",
+                    error_type: str = ""):
+        """
+        Mark stage FAILED and record the *type* of failure so the retry
+        dispatcher can pick an appropriate strategy. Common error_type values:
+          - 'api_error'         transient Vision/Gemini failure
+          - 'keyword_not_found' anchor keyword absent on scanned pages
+          - 'no_match'          deterministic model returned no candidate
+          - 'not_detected'      heuristic detector found nothing
+          - 'invalid_crop'      bbox computation produced empty region
+          - 'exception'         unhandled exception (text in error)
+        """
+        et = error_type or _classify_error(error)
+        self._update(pdf_stem, stage, FAILED, "",
+                     {f"{stage}_error_type": et})
 
     def mark_skipped(self, pdf_stem: str, stage: str):
         """Mark stage SKIPPED (e.g. grid/location when lat/lon was found)."""
@@ -153,6 +204,10 @@ class ProcessingStatus:
     def get_status(self, pdf_stem: str, stage: str) -> str:
         """Return the raw status string for a (stem, stage) pair."""
         return self._rows.get(pdf_stem, {}).get(f"{stage}_status", PENDING)
+
+    def get_error_type(self, pdf_stem: str, stage: str) -> str:
+        """Return the recorded error_type for a failed stage, or '' if none."""
+        return self._rows.get(pdf_stem, {}).get(f"{stage}_error_type", "")
 
     def latlong_detected(self, pdf_stem: str) -> bool:
         """True iff both lat and lon were stored — used to skip grid/location."""

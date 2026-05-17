@@ -69,15 +69,28 @@ def _ocr_bytes(image_bytes: bytes):
     )
 
 
-def detect_text_with_vision(pil_image: PILImage.Image):
+def detect_text_with_vision(pil_image: PILImage.Image, *,
+                            manager: PDFDocumentManager = None,
+                            page_num: int = None):
     """
     Preprocess (grayscale + contrast + binarize) the given PIL image and
     run document_text_detection. Returns the `text_annotations` list
     (possibly empty).
+
+    If both `manager` and `page_num` are provided, the result is cached
+    under key (page_num, 'pre') on the manager, letting subsequent stages
+    that need the same preprocessed annotations skip the Vision call.
     """
+    cache_key = (page_num, "pre") if (manager and page_num is not None) else None
+    if cache_key and cache_key in manager._ocr_cache:
+        return manager._ocr_cache[cache_key]
+
     processed   = preprocess_image(pil_image).convert("RGB")
     image_bytes = _pil_to_bytes(processed)
-    return _ocr_bytes(image_bytes).text_annotations
+    annotations = _ocr_bytes(image_bytes).text_annotations
+    if cache_key:
+        manager._ocr_cache[cache_key] = annotations
+    return annotations
 
 
 def get_page_annotations(
@@ -92,6 +105,10 @@ def get_page_annotations(
     Render a PDF page and OCR it. Accepts a file path, raw bytes, or an
     existing PDFDocumentManager (preferred — avoids re-opening the doc).
     Returns (text_annotations | None, pil_image | None).
+
+    When a manager is supplied, the (annotations, pil_image) tuple is
+    cached on manager._ocr_cache[page_num] so subsequent stages on the
+    same record skip the Vision API call.
     """
     try:
         if manager is None:
@@ -99,6 +116,11 @@ def get_page_annotations(
                 pdf_path, pdf_bytes=pdf_bytes,
                 resolution_multiplier=resolution_multiplier,
             )
+
+        cached = manager._ocr_cache.get(page_num)
+        if cached is not None:
+            return cached
+
         pil_image = manager.get_page_pil(page_num)
         if pil_image is None:
             return None, None
@@ -106,7 +128,9 @@ def get_page_annotations(
         response = _ocr_bytes(_pil_to_bytes(pil_image))
         if response.error.message:
             return None, pil_image
-        return (response.text_annotations or None), pil_image
+        result = (response.text_annotations or None), pil_image
+        manager._ocr_cache[page_num] = result
+        return result
 
     except Exception as exc:
         src = pdf_path or ("bytes" if pdf_bytes else "manager")

@@ -101,5 +101,25 @@ COUNTY_MAP_CLEAN_TO_ORIGINAL = {
 FUZZY_MATCH_THRESHOLD      = 86
 RETRY_CONFIDENCE_THRESHOLD = 95
 
+# -- Per-stage page caps -------------------------------------------------------
+# First-pass page limits (kept small to control API cost). Retry path uses
+# the *_RETRY values which scan deeper.
+MAX_LATLONG_PAGES        = 2
+MAX_LATLONG_PAGES_RETRY  = 99      # scan everything on retry
+MAX_COUNTY_PAGES         = 2
+MAX_COUNTY_PAGES_RETRY   = 99
+
+# -- Retry heuristics ----------------------------------------------------------
+# Crop multiplier used by the county no_match retry strategy.
+COUNTY_RETRY_CROP_SCALE  = 1.5
+# Location pairing strictness; first pass uses the strict value, retry uses loose.
+LOCATION_MIN_OVERLAP     = 0.35
+LOCATION_MIN_OVERLAP_RETRY = 0.15
+# Grid size band: strict first pass, then relaxed on retry.
+GRID_W_STRICT = (280, 850)
+GRID_H_STRICT = (280, 850)
+GRID_W_LOOSE  = (150, 1200)
+GRID_H_LOOSE  = (150, 1200)
+
 # -- Processing ----------------------------------------------------------------
 MAX_WORKERS = max(1, os.cpu_count() - 1)

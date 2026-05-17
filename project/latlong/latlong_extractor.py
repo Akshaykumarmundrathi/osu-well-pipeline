@@ -169,15 +169,19 @@ def process_single_latlong(
         "error":     None,
     }
 
+    from config import MAX_LATLONG_PAGES
+    max_pages = getattr(process_single_latlong, "_max_pages_override",
+                        MAX_LATLONG_PAGES)
     try:
         # Lat/Lon labels are virtually always on cover/metadata page.
-        # Limit to first 2 pages — saves Vision API calls on 3+ page docs
-        # where coords are not present.
-        _MAX_PAGES = 2
+        # Cap configurable via config.MAX_LATLONG_PAGES (retry path overrides
+        # by setting process_single_latlong._max_pages_override).
         for idx, (page_num, pil_image) in enumerate(manager.iter_pil_pages()):
-            if idx >= _MAX_PAGES:
+            if idx >= max_pages:
                 break
-            annotations = detect_text_with_vision(pil_image)
+            annotations = detect_text_with_vision(
+                pil_image, manager=manager, page_num=page_num,
+            )
             if not annotations:
                 continue
 

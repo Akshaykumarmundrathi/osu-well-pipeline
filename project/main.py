@@ -138,9 +138,10 @@ def _format_stage_result(stage: str, r: dict, elapsed: float) -> str:
 
     if stage == STAGE_LOCATION:
         if r.get("detected"):
-            sec_ = r.get("section") or "-"
-            twp  = r.get("township") or "-"
-            rng  = r.get("range") or "-"
+            # '?' = field wasn't extracted (regex miss / OCR gap).
+            sec_ = r.get("section") or "?"
+            twp  = r.get("township") or "?"
+            rng  = r.get("range") or "?"
             conf = r.get("confidence", 0)
             return f"sec={sec_}  twp={twp}  rng={rng}   ({conf}%){sec}"
         return f"not found{sec}"
@@ -430,8 +431,9 @@ def run_one_record(
         results[stage] = r
 
         if r.get("error") and not r.get("detected"):
-            status.mark_failed(record.pdf_stem, stage, r["error"])
-            _append_failed(record, stage, r["error"])
+            err = r["error"]
+            status.mark_failed(record.pdf_stem, stage, err)
+            _append_failed(record, stage, err)
         else:
             status.mark_done(record.pdf_stem, stage, r)
 
@@ -479,6 +481,128 @@ def _dispatch(stage: str, manager: PDFDocumentManager,
 _RETRIED: set[str] = set()           # stems already retried this run
 
 
+def _retry_one_stage(stage: str, error_type: str, manager, out_dir: Path,
+                     pdf_stem: str, pdf_log):
+    """
+    Re-run a single failed stage with a strategy chosen from `error_type`.
+    Returns the new result dict (or None when no strategy applies).
+
+    Strategies:
+      county / keyword_not_found  -> scan deeper pages
+      county / no_match           -> wider crop, then full-page Pro fallback
+      location / not_found        -> looser min_overlap pairing + per-keyword fallback
+      grid / not_detected         -> relaxed size band, forward iteration
+      latlong / *                 -> scan ALL pages
+      *  / api_error              -> simple retry (transient)
+    """
+    from config import (
+        COUNTY_RETRY_CROP_SCALE, LOCATION_MIN_OVERLAP_RETRY,
+        MAX_COUNTY_PAGES_RETRY, MAX_LATLONG_PAGES_RETRY,
+    )
+
+    if stage == STAGE_COUNTY:
+        from county.county_extractor import process_single_county
+        if error_type == "keyword_not_found":
+            return process_single_county(
+                manager, out_dir, pdf_stem, pdf_log,
+                max_pages=MAX_COUNTY_PAGES_RETRY,
+            )
+        if error_type in ("no_match", "invalid_crop", "exception", "unknown", ""):
+            # Try wider crop first; if still no_match, go to full-page Pro.
+            r = process_single_county(
+                manager, out_dir, pdf_stem, pdf_log,
+                crop_scale=COUNTY_RETRY_CROP_SCALE,
+            )
+            if r.get("detected"):
+                return r
+            return process_single_county(
+                manager, out_dir, pdf_stem, pdf_log,
+                full_page_gemini=True,
+            )
+        # api_error or other transient -> plain retry
+        return process_single_county(manager, out_dir, pdf_stem, pdf_log)
+
+    if stage == STAGE_LOCATION:
+        from location.location_extractor import process_single_location
+        return process_single_location(
+            manager, out_dir, pdf_stem, pdf_log,
+            min_overlap=LOCATION_MIN_OVERLAP_RETRY,
+        )
+
+    if stage == STAGE_GRID:
+        from grid.scoring import process_single_grid
+        return process_single_grid(
+            manager, out_dir, pdf_stem, pdf_log, relaxed=True,
+        )
+
+    if stage == STAGE_LATLONG:
+        from latlong.latlong_extractor import process_single_latlong
+        # Temporarily override the page cap to scan every page.
+        process_single_latlong._max_pages_override = MAX_LATLONG_PAGES_RETRY
+        try:
+            return process_single_latlong(manager, pdf_stem, pdf_log)
+        finally:
+            try:
+                del process_single_latlong._max_pages_override
+            except AttributeError:
+                pass
+
+    return None
+
+
+def _retry_record(record: DatasetRecord, stages: tuple,
+                  paths: OutputPathBuilder, status: ProcessingStatus,
+                  num: int, total: int):
+    """
+    Re-run only the FAILED stages of a single record, using a strategy
+    chosen from each stage's stored error_type. Prints one compact
+    summary line per record (replaces the verbose retry block).
+    """
+    pdf_log = get_pdf_logger(record.pdf_stem, paths.log_path(record))
+    well    = _well_name_from_stem(record.pdf_stem)
+
+    try:
+        manager = _make_manager(record)
+    except Exception as exc:
+        _p(f"  [Retry {num:>3}/{total}]  {well}  -- cannot open PDF: {exc}")
+        return
+
+    stage_dirs = {
+        STAGE_LATLONG:  paths.grids_dir(record),
+        STAGE_GRID:     paths.grids_dir(record),
+        STAGE_LOCATION: paths.locations_dir(record),
+        STAGE_COUNTY:   paths.counties_dir(record),
+    }
+
+    parts: list[str] = []
+    for stage in stages:
+        if status.get_status(record.pdf_stem, stage) != FAILED:
+            continue
+        et = status.get_error_type(record.pdf_stem, stage) or "unknown"
+
+        t0 = time.monotonic()
+        try:
+            r = _retry_one_stage(stage, et, manager,
+                                 stage_dirs[stage], record.pdf_stem, pdf_log)
+        except Exception as exc:
+            pdf_log.error("[retry][%s] unhandled: %s", stage, exc, exc_info=True)
+            r = {"detected": False, "error": str(exc)}
+        elapsed = time.monotonic() - t0
+
+        label = _STAGE_LABEL.get(stage, stage)
+        if r and r.get("detected"):
+            status.mark_done(record.pdf_stem, stage, r)
+            parts.append(f"{label} {et}->OK ({elapsed:.0f}s)")
+        else:
+            new_err = (r.get("error") if r else "no_change") or "no_change"
+            status.mark_failed(record.pdf_stem, stage, new_err)
+            _append_failed(record, stage, f"retry({et}): {new_err}")
+            parts.append(f"{label} {et}->{new_err[:20]} ({elapsed:.0f}s)")
+
+    summary = " | ".join(parts) if parts else "no FAILED stages"
+    _p(f"  [Retry {num:>3}/{total}]  {well}  -- {summary}")
+
+
 def _retry_failed(
     records: list,
     stages: tuple,
@@ -488,9 +612,9 @@ def _retry_failed(
     label: str = "",
 ):
     """
-    Retry failed records ONCE per run. Skip records whose only failures
-    are deterministic (no_match / keyword_not_found) — same input + same
-    model = same result, retry is wasted ~10s/record.
+    Retry every record with a FAILED stage ONCE per run, using the
+    failure-type-aware dispatcher. Skipped on second invocation for the
+    same stem (so month-retry + year-retry don't double up).
     """
     stems   = [r.pdf_stem for r in records]
     failed  = status.failed_in(stems, stages)
@@ -506,8 +630,7 @@ def _retry_failed(
     _p(f"\n  Retrying {len(to_retry)} failed record(s)  [{label}]")
     for i, record in enumerate(to_retry, 1):
         _RETRIED.add(record.pdf_stem)
-        run_one_record(record, stages, paths, status, resume=True,
-                       record_num=i, total=len(to_retry))
+        _retry_record(record, stages, paths, status, i, len(to_retry))
     status.force_save()
 
 

@@ -1,25 +1,9 @@
-import io
-from pathlib import Path
+"""
+Image annotation helper. Other small I/O wrappers were removed because
+nothing in the project imported them.
+"""
+
 from PIL import Image as PILImage, ImageDraw
-
-
-def ensure_dir(path: Path) -> Path:
-    path.mkdir(parents=True, exist_ok=True)
-    return path
-
-
-def list_pdfs(folder: Path) -> list[Path]:
-    return sorted(folder.glob("*.pdf"))
-
-
-def stem(path: Path) -> str:
-    return Path(path).stem
-
-
-def pil_to_bytes(image: PILImage.Image, fmt: str = "PNG") -> bytes:
-    buf = io.BytesIO()
-    image.convert("RGB").save(buf, format=fmt)
-    return buf.getvalue()
 
 
 def annotate_page(
@@ -29,10 +13,14 @@ def annotate_page(
     label: str = "",
     width: int = 4,
 ) -> PILImage.Image:
-    """Draw a bounding box on a copy of the page for visual debugging."""
+    """
+    Return a copy of `pil_image` with `bbox` drawn as a coloured rectangle
+    and an optional text `label` above its top-left corner. Used for
+    saving annotated debug pages alongside extraction crops.
+    """
     annotated = pil_image.copy().convert("RGB")
     draw = ImageDraw.Draw(annotated)
-    x0, y0, x1, y1 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
+    x0, y0, x1, y1 = (int(c) for c in bbox)
     draw.rectangle([x0, y0, x1, y1], outline=color, width=width)
     if label:
         draw.text((x0 + 4, max(0, y0 - 18)), label, fill=color)

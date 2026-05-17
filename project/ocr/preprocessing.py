@@ -3,7 +3,7 @@ from PIL import Image as PILImage, ImageEnhance
 
 def preprocess_image(pil_image: PILImage.Image) -> PILImage.Image:
     """
-    Grayscale → contrast boost → binarize.
+    Grayscale -> contrast boost -> binarize.
     Accepts a PIL image; returns a processed PIL image.
     No disk I/O — safe for parallel workers.
     """

@@ -46,11 +46,15 @@ _EMPTY_ROW = {f: "" for f in _FIELDNAMES}
 
 
 def _now() -> str:
+    """UTC timestamp string ('YYYY-MM-DDTHH:MM:SS')."""
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
 
 
 class ProcessingStatus:
+    """In-memory mirror of processing_status.csv with batched writes."""
+
     def __init__(self, csv_path: Path):
+        """Load existing CSV (if any) into self._rows keyed by pdf_stem."""
         self.csv_path = csv_path
         self._rows: dict[str, dict] = {}
         self._pending = 0
@@ -59,6 +63,7 @@ class ProcessingStatus:
     # -- I/O ------------------------------------------------------------------
 
     def _load(self):
+        """Read existing rows, fill missing columns from new schema with ''."""
         if not self.csv_path.exists():
             return
         with self.csv_path.open(newline="", encoding="utf-8") as f:
@@ -68,6 +73,7 @@ class ProcessingStatus:
                 self._rows[full["pdf_stem"]] = full
 
     def save(self):
+        """Rewrite the entire CSV from current in-memory rows."""
         self.csv_path.parent.mkdir(parents=True, exist_ok=True)
         with self.csv_path.open("w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=_FIELDNAMES, extrasaction="ignore")
@@ -75,7 +81,7 @@ class ProcessingStatus:
             writer.writerows(self._rows.values())
 
     def force_save(self):
-        """Explicitly flush — call at month/year boundaries and process exit."""
+        """Flush pending updates to disk; call at boundaries and process exit."""
         self.save()
         self._pending = 0
 
@@ -83,6 +89,7 @@ class ProcessingStatus:
 
     def init_record(self, pdf_stem: str, pdf_path: str,
                     collection: str = "", year: str = "", month: str = ""):
+        """Create a PENDING row for `pdf_stem` if it doesn't already exist."""
         if pdf_stem in self._rows:
             return
         row = dict(_EMPTY_ROW)
@@ -132,35 +139,39 @@ class ProcessingStatus:
         self._update(pdf_stem, stage, DONE, confidence, extra)
 
     def mark_failed(self, pdf_stem: str, stage: str, error: str = ""):
-        # Error details are written to failed_records.csv and the per-PDF log.
-        # Status field alone is enough for resume/retry logic.
+        """Mark stage FAILED. Error text is logged elsewhere (failed_records.csv)."""
         self._update(pdf_stem, stage, FAILED, "", {})
 
     def mark_skipped(self, pdf_stem: str, stage: str):
+        """Mark stage SKIPPED (e.g. grid/location when lat/lon was found)."""
         self._update(pdf_stem, stage, SKIPPED, "", {})
 
     def is_done(self, pdf_stem: str, stage: str) -> bool:
+        """True iff the given stage is in the DONE state for this record."""
         return self._rows.get(pdf_stem, {}).get(f"{stage}_status") == DONE
 
     def get_status(self, pdf_stem: str, stage: str) -> str:
+        """Return the raw status string for a (stem, stage) pair."""
         return self._rows.get(pdf_stem, {}).get(f"{stage}_status", PENDING)
 
     def latlong_detected(self, pdf_stem: str) -> bool:
-        """True only if lat AND lon values are stored (means coordinates were found)."""
+        """True iff both lat and lon were stored — used to skip grid/location."""
         row = self._rows.get(pdf_stem, {})
         return bool(row.get("latlong_lat")) and bool(row.get("latlong_lon"))
 
     def all_done(self, pdf_stem: str) -> bool:
+        """True iff every stage in ALL_STAGES is DONE for this record."""
         return all(self.is_done(pdf_stem, s) for s in ALL_STAGES)
 
     def failed_in(self, stems: list[str], stages: tuple) -> list[str]:
-        """Return stems that have at least one FAILED stage in `stages`."""
+        """Subset of `stems` that have at least one FAILED stage in `stages`."""
         return [
             s for s in stems
             if any(self.get_status(s, st) == FAILED for st in stages)
         ]
 
     def counts(self) -> dict:
+        """Per-stage tally: {stage: {done, failed, pending, skipped: int}}."""
         totals = {s: {DONE: 0, FAILED: 0, PENDING: 0, SKIPPED: 0} for s in ALL_STAGES}
         for row in self._rows.values():
             for s in ALL_STAGES:
@@ -172,6 +183,11 @@ class ProcessingStatus:
 
     def _update(self, pdf_stem: str, stage: str,
                 status: str, confidence: str, extra: dict):
+        """
+        Write the stage's status + confidence + any stage-specific extras
+        to the row, bump last_updated, and flush to disk every
+        SAVE_INTERVAL changes.
+        """
         if pdf_stem not in self._rows:
             row = dict(_EMPTY_ROW)
             row["pdf_stem"] = pdf_stem

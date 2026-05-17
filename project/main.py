@@ -70,10 +70,12 @@ _COL = 14   # label column width
 
 
 def _p(msg: str = ""):
+    """Flushing print — guarantees the line lands in real time."""
     print(msg, flush=True)
 
 
 def _banner(msg: str):
+    """Top/bottom '=' bordered block for major pipeline boundaries."""
     _p()
     _p("=" * 68)
     _p(f"  {msg}")
@@ -81,34 +83,34 @@ def _banner(msg: str):
 
 
 def _section_header(collection: str, year: str, month: str, count: int):
+    """Light divider introducing a new (collection / year / month) group."""
     label = f"{collection or 'cli'} / {year or '-'} / {month or '-'}"
     _p(f"\n  {'─'*60}")
     _p(f"  {label}   [{count:,} records]")
     _p(f"  {'─'*60}")
 
 
-def _stage_line(label: str, text: str, inline: bool = False):
-    """Print a stage result. If inline, writes to existing line."""
-    prefix = f"  {label:<{_COL}}"
-    if inline:
-        print(text, flush=True)   # completes the line started by _stage_start
-    else:
-        _p(f"{prefix}{text}")
+def _stage_line(label: str, text: str):
+    """Print a complete stage line: '  {label}{text}'."""
+    _p(f"  {label:<{_COL}}{text}")
 
 
 def _stage_start(label: str):
-    """Print stage label and leave cursor at end of line (no newline)."""
+    """Print the stage label and leave the cursor mid-line (no newline)."""
     print(f"  {label:<{_COL}}", end="", flush=True)
 
 
 def _record_header(num: int, total: int, well_name: str,
                    collection: str, year: str, month: str, pages: int):
+    """Two-line record intro: '[i/total]  WELL' + 'col | year | month  (Np)'."""
     _p()
     _p(f"  [{num:>7,} / {total:,}]  {well_name}")
-    _p(f"  {'':>{_COL}}{collection or ''} | {year or ''} | {month or ''}  ({pages} page{'s' if pages != 1 else ''})")
+    _p(f"  {'':>{_COL}}{collection or ''} | {year or ''} | {month or ''}  "
+       f"({pages} page{'s' if pages != 1 else ''})")
 
 
 def _format_stage_result(stage: str, r: dict, elapsed: float) -> str:
+    """Compact one-line summary of a stage's result dict, suffixed with elapsed."""
     sec = f"  ({elapsed:.0f}s)"
 
     if r.get("error") and not r.get("detected"):
@@ -179,6 +181,7 @@ def _record_status_line(stages_run: dict, stages: tuple):
 
 
 def _totals_line(done: int, failed: int, skipped: int, total: int):
+    """Running progress: 'Progress: N / T (P%)   done=.. failed=.. skipped=..'."""
     pct = int(100 * (done + failed + skipped) / total) if total else 0
     _p(f"\n  Progress: {done + failed + skipped:,} / {total:,} ({pct}%)"
        f"   done={done:,}  failed={failed:,}  skipped={skipped:,}")
@@ -187,10 +190,16 @@ def _totals_line(done: int, failed: int, skipped: int, total: int):
 # -- Utility functions ---------------------------------------------------------
 
 def _now() -> str:
+    """UTC timestamp string in 'YYYY-MM-DDTHH:MM:SS' format."""
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
 
 
 def _well_name_from_stem(pdf_stem: str) -> str:
+    """
+    Stem format: '{api_or_prefix}_{WELL NAME}_{record_id}'.
+    Returns the middle slice, falling back to the full stem if the
+    underscore layout is unexpected.
+    """
     first = pdf_stem.find("_")
     last  = pdf_stem.rfind("_")
     if first != -1 and last != first:
@@ -201,6 +210,10 @@ def _well_name_from_stem(pdf_stem: str) -> str:
 # -- PDF source resolution -----------------------------------------------------
 
 def _make_manager(record: DatasetRecord) -> PDFDocumentManager:
+    """
+    Build a PDFDocumentManager for the record's source — either raw bytes
+    extracted from a ZIP entry, or a direct file path on disk.
+    """
     if record.zip_path:
         pdf_bytes = get_pdf_bytes(record.zip_path, record.internal_path)
         return PDFDocumentManager(pdf_bytes=pdf_bytes,
@@ -212,6 +225,7 @@ def _make_manager(record: DatasetRecord) -> PDFDocumentManager:
 # -- CSV writers ---------------------------------------------------------------
 
 def write_metadata(record: DatasetRecord, results: dict, paths: OutputPathBuilder):
+    """Write per-record metadata.json with source info + raw stage outputs."""
     meta_path = paths.metadata_path(record)
     meta_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -233,6 +247,7 @@ def write_metadata(record: DatasetRecord, results: dict, paths: OutputPathBuilde
 
 
 def _append_failed(record: DatasetRecord, stage: str, error: str):
+    """Append one row to manual_review/failed_records.csv (with header if new)."""
     FAILED_RECORDS_CSV.parent.mkdir(parents=True, exist_ok=True)
     exists = FAILED_RECORDS_CSV.exists()
     with FAILED_RECORDS_CSV.open("a", newline="", encoding="utf-8") as f:
@@ -243,6 +258,11 @@ def _append_failed(record: DatasetRecord, stage: str, error: str):
 
 
 def write_summary_csv(status: ProcessingStatus, output_path: Path):
+    """
+    Materialize the full per-record summary CSV from the in-memory status
+    rows. `all_success` is True when the record has either lat/lon OR
+    (grid AND location), plus a county match.
+    """
     output_path.parent.mkdir(parents=True, exist_ok=True)
     count = 0
     with output_path.open("w", newline="", encoding="utf-8") as f:
@@ -291,6 +311,7 @@ def write_summary_csv(status: ProcessingStatus, output_path: Path):
 
 
 def write_latlong_csv(status: ProcessingStatus, output_path: Path):
+    """Write a separate CSV with only the records that had decimal lat/lon."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
     count = 0
     with output_path.open("w", newline="", encoding="utf-8") as f:
@@ -330,6 +351,14 @@ def run_one_record(
     record_num: int = 0,
     total: int = 0,
 ) -> dict:
+    """
+    Process a single PDF through the given stages.
+    - Opens the PDF (failure marks ALL stages failed and returns {})
+    - For each stage: skip if already done (resume); skip grid/location
+      when lat/lon was found; otherwise dispatch and record result.
+    - Writes per-stage status + a metadata.json for stages that actually ran.
+    Returns the per-stage results dict.
+    """
     pdf_log = get_pdf_logger(record.pdf_stem, paths.log_path(record))
     pdf_log.debug("=== START %s ===", record.pdf_stem)
 
@@ -424,6 +453,8 @@ def run_one_record(
 
 def _dispatch(stage: str, manager: PDFDocumentManager,
               out_dir: Path, pdf_stem: str, log) -> dict:
+    """Route a stage name to its extractor entry point. Lazy-imports each
+    sub-module so a stage that's never invoked never pays the import cost."""
     if stage == STAGE_LATLONG:
         from latlong.latlong_extractor import process_single_latlong
         return process_single_latlong(manager, pdf_stem, log)
@@ -483,6 +514,11 @@ def _retry_failed(
 # -- Pipeline runner -----------------------------------------------------------
 
 def run_pipeline(args):
+    """
+    End-to-end pipeline. Loads/scans records, groups them by
+    (collection, year, month), processes each group, retries failures at
+    month and year boundaries, then writes the final summary CSVs.
+    """
     output_root = Path(args.output)
     output_root.mkdir(parents=True, exist_ok=True)
 
@@ -632,6 +668,7 @@ def run_pipeline(args):
 
 
 def print_status(status_csv: Path):
+    """Print per-stage done/failed/pending counts from a status CSV."""
     s = ProcessingStatus(status_csv)
     c = s.counts()
     _banner(f"Status -- {status_csv.name}   ({len(s._rows):,} records)")
@@ -647,6 +684,8 @@ def print_status(status_csv: Path):
 # -- CLI -----------------------------------------------------------------------
 
 def main():
+    """CLI entry point. Parses args and dispatches to run_pipeline or
+    print_status. See module docstring for usage examples."""
     ap = argparse.ArgumentParser(description="Oklahoma well records pipeline")
     ap.add_argument("--stage",     choices=list(ALL_STAGES))
     ap.add_argument("--resume",    action="store_true", default=True)

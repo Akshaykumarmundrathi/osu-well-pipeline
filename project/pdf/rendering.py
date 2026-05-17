@@ -19,4 +19,4 @@ def pixmap_to_cv2(pix):
     np_img = np.frombuffer(
         pix.samples, dtype=np.uint8
     ).reshape(pix.height, pix.width, 3)
-    return np_img[:, :, ::-1]  # RGB → BGR
+    return np_img[:, :, ::-1]  # RGB -> BGR

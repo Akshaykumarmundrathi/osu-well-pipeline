@@ -1,8 +1,10 @@
 """
 Google Cloud Vision OCR helpers.
-- Singleton client — reset on connection errors, recreated automatically.
-- Retry with exponential backoff for transient 503/UNAVAILABLE errors.
-- All image data via BytesIO — no temp files.
+
+- Singleton client. On gRPC channel failure (503 / UNAVAILABLE) the
+  client is reset so the next call rebuilds a fresh channel.
+- Retry with exponential back-off for transient failures (3, 6, 15s).
+- All image data is passed in-memory via BytesIO — no temp files.
 """
 
 import io
@@ -16,10 +18,11 @@ from ocr.preprocessing import preprocess_image
 from pdf.pdf_manager import PDFDocumentManager
 
 _client: vision.ImageAnnotatorClient | None = None
-_RETRY_DELAYS = [3, 6, 15]  # seconds; 3 attempts after first failure
+_RETRY_DELAYS = [3, 6, 15]   # 3 retries after first failure
 
 
 def _get_client() -> vision.ImageAnnotatorClient:
+    """Lazy singleton accessor for the Vision client."""
     global _client
     if _client is None:
         _client = vision.ImageAnnotatorClient()
@@ -27,11 +30,13 @@ def _get_client() -> vision.ImageAnnotatorClient:
 
 
 def _reset_client():
+    """Drop the cached client; next _get_client() builds a fresh channel."""
     global _client
     _client = None
 
 
 def _pil_to_bytes(image: PILImage.Image) -> bytes:
+    """Encode a PIL image as PNG bytes (RGB)."""
     buf = io.BytesIO()
     image.convert("RGB").save(buf, format="PNG")
     return buf.getvalue()
@@ -39,12 +44,12 @@ def _pil_to_bytes(image: PILImage.Image) -> bytes:
 
 def _call_with_retry(fn):
     """
-    Call fn(). On ServiceUnavailable (503 / grpc UNAVAILABLE), reset the
-    client channel and retry with exponential back-off.
-    Any other exception propagates immediately.
+    Invoke `fn()`. On ServiceUnavailable, reset the client and retry with
+    exponential back-off. Any other exception propagates immediately.
+    Raises the last ServiceUnavailable if all retries are exhausted.
     """
     last_exc = None
-    for attempt, delay in enumerate([0] + _RETRY_DELAYS):
+    for delay in [0] + _RETRY_DELAYS:
         if delay:
             time.sleep(delay)
         try:
@@ -52,26 +57,27 @@ def _call_with_retry(fn):
         except ServiceUnavailable as exc:
             last_exc = exc
             _reset_client()
-        except Exception:
-            raise
     raise last_exc
+
+
+def _ocr_bytes(image_bytes: bytes):
+    """Run document_text_detection on raw image bytes; returns the response."""
+    return _call_with_retry(
+        lambda: _get_client().document_text_detection(
+            image=vision.Image(content=image_bytes)
+        )
+    )
 
 
 def detect_text_with_vision(pil_image: PILImage.Image):
     """
-    Preprocess PIL image in-memory -> document_text_detection.
-    Retries on transient 503. Returns text_annotations list (may be empty).
+    Preprocess (grayscale + contrast + binarize) the given PIL image and
+    run document_text_detection. Returns the `text_annotations` list
+    (possibly empty).
     """
     processed   = preprocess_image(pil_image).convert("RGB")
     image_bytes = _pil_to_bytes(processed)
-
-    def _call():
-        return _get_client().document_text_detection(
-            image=vision.Image(content=image_bytes)
-        )
-
-    response = _call_with_retry(_call)
-    return response.text_annotations
+    return _ocr_bytes(image_bytes).text_annotations
 
 
 def get_page_annotations(
@@ -83,8 +89,8 @@ def get_page_annotations(
     manager: PDFDocumentManager = None,
 ):
     """
-    Render a PDF page and run Vision OCR.
-    Accepts a file path, raw bytes, or an existing PDFDocumentManager.
+    Render a PDF page and OCR it. Accepts a file path, raw bytes, or an
+    existing PDFDocumentManager (preferred — avoids re-opening the doc).
     Returns (text_annotations | None, pil_image | None).
     """
     try:
@@ -93,23 +99,13 @@ def get_page_annotations(
                 pdf_path, pdf_bytes=pdf_bytes,
                 resolution_multiplier=resolution_multiplier,
             )
-
         pil_image = manager.get_page_pil(page_num)
         if pil_image is None:
             return None, None
 
-        image_bytes = _pil_to_bytes(pil_image)
-
-        def _call():
-            return _get_client().document_text_detection(
-                image=vision.Image(content=image_bytes)
-            )
-
-        response = _call_with_retry(_call)
-
+        response = _ocr_bytes(_pil_to_bytes(pil_image))
         if response.error.message:
             return None, pil_image
-
         return (response.text_annotations or None), pil_image
 
     except Exception as exc:
@@ -120,7 +116,8 @@ def get_page_annotations(
 
 def find_keyword_box(text_annotations, keywords: list[str]) -> list | None:
     """
-    First annotation token matching any keyword -> [x_min, y_min, x_max, y_max].
+    Return [x_min, y_min, x_max, y_max] of the first annotation token
+    whose lowercased description contains any of the given keywords.
     Returns None if not found.
     """
     if not text_annotations:

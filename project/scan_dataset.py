@@ -47,10 +47,12 @@ class DatasetRecord:
 # -- Path helpers --------------------------------------------------------------
 
 def _safe(s: str) -> str:
+    """Filesystem-safe slug: collapse non-word chars to '_' and strip ends."""
     return re.sub(r"[^\w]", "_", s).strip("_")
 
 
 def _now() -> str:
+    """UTC ISO-like timestamp ('YYYY-MM-DDTHH:MM:SS')."""
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
 
 
@@ -60,25 +62,33 @@ class OutputPathBuilder:
     """Derives all output paths from a DatasetRecord, mirroring input hierarchy."""
 
     def __init__(self, output_root: Path):
+        """Bind an output root used as the prefix for every derived path."""
         self.root = output_root
 
+    def _parts(self, r: DatasetRecord) -> tuple[str, str, str]:
+        """(collection, year, month) path-safe slugs with sensible fallbacks."""
+        return (
+            r.collection_safe or "local",
+            r.year            or "unknown",
+            r.month_safe      or "unknown",
+        )
+
     def _base(self, r: DatasetRecord, stage: str) -> Path:
-        col   = r.collection_safe or "local"
-        year  = r.year            or "unknown"
-        month = r.month_safe      or "unknown"
+        """Per-stage output directory: <root>/<stage>/<col>/<year>/<month>/<stem>."""
+        col, year, month = self._parts(r)
         return self.root / stage / col / year / month / r.pdf_stem
 
-    def grids_dir(self,    r: DatasetRecord) -> Path: return self._base(r, "grids")
-    def locations_dir(self,r: DatasetRecord) -> Path: return self._base(r, "locations")
-    def counties_dir(self, r: DatasetRecord) -> Path: return self._base(r, "counties")
+    def grids_dir(self,     r: DatasetRecord) -> Path: return self._base(r, "grids")
+    def locations_dir(self, r: DatasetRecord) -> Path: return self._base(r, "locations")
+    def counties_dir(self,  r: DatasetRecord) -> Path: return self._base(r, "counties")
 
     def metadata_path(self, r: DatasetRecord) -> Path:
+        """Path to the per-record metadata.json file."""
         return self._base(r, "metadata") / "metadata.json"
 
     def log_path(self, r: DatasetRecord) -> Path:
-        col   = r.collection_safe or "local"
-        year  = r.year            or "unknown"
-        month = r.month_safe      or "unknown"
+        """Path to the per-record .log file under <root>/logs/..."""
+        col, year, month = self._parts(r)
         return self.root / "logs" / col / year / month / f"{r.pdf_stem}.log"
 
 
@@ -181,6 +191,7 @@ _FIELDS = list(DatasetRecord.__dataclass_fields__.keys())
 
 
 def write_index(records: list[DatasetRecord], csv_path: Path):
+    """Persist a DatasetRecord list to CSV, one row per record."""
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     with csv_path.open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=_FIELDS)
@@ -190,6 +201,7 @@ def write_index(records: list[DatasetRecord], csv_path: Path):
 
 
 def load_index(csv_path: Path) -> list[DatasetRecord]:
+    """Read the index CSV back into DatasetRecord objects (empty if missing)."""
     if not csv_path.exists():
         return []
     int_fields = {"collection_num", "file_size_bytes"}
@@ -206,6 +218,7 @@ def load_index(csv_path: Path) -> list[DatasetRecord]:
 # -- CLI -----------------------------------------------------------------------
 
 def _summary(csv_path: Path):
+    """Print counts and totals from an existing dataset index CSV."""
     records = load_index(csv_path)
     if not records:
         print("No index found.")
@@ -222,6 +235,7 @@ def _summary(csv_path: Path):
 
 
 def _validate(csv_path: Path):
+    """Check that every indexed ZIP/PDF still exists on disk."""
     records = load_index(csv_path)
     missing = []
     for r in records:
@@ -239,6 +253,7 @@ def _validate(csv_path: Path):
 
 
 def main():
+    """CLI entry: scan ZIPs or a flat folder and write a dataset index CSV."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--source",   type=Path, default=SOURCE_ROOT)
     ap.add_argument("--flat",     type=Path)

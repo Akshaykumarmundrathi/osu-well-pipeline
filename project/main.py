@@ -34,6 +34,7 @@ from config import (
 )
 from pdf.pdf_manager import PDFDocumentManager
 from scan_dataset import DatasetRecord, OutputPathBuilder, load_index, scan_flat_folder
+from utils.insights import InsightsCollector
 from utils.logging_utils import get_logger, get_pdf_logger
 from utils.processing_status import DONE, FAILED, SKIPPED, ProcessingStatus
 from utils.zip_reader import get_pdf_bytes
@@ -548,6 +549,10 @@ def _process_record_worker(arg):
         pdf_log.debug("[%s] %.1fs detected=%s", stage.upper(), elapsed,
                       r.get("detected"))
 
+        # Stamp elapsed so the parent's insights collector can aggregate it.
+        if isinstance(r, dict):
+            r["_elapsed"] = elapsed
+
         lines.append(f"  {label:<{_COL}}{_format_stage_result(stage, r, elapsed)}")
         results[stage] = r
 
@@ -864,6 +869,8 @@ def run_pipeline(args):
     year_group_records: list = []
     prev_year_key: tuple | None = None
     workers = max(1, int(getattr(args, "workers", 1) or 1))
+    insights = InsightsCollector(output_root, workers=workers,
+                                 total_records=len(records))
 
     for (collection, year, month), month_recs in month_groups:
         cur_year_key = (collection, year)
@@ -905,6 +912,11 @@ def run_pipeline(args):
                     _apply_results(rec, stages, results, status)
                 except Exception as exc:
                     _p(f"  apply_results failed for {stem}: {exc}")
+                # Insights aggregation (single-writer, parent process).
+                try:
+                    insights.add(rec, results)
+                except Exception as exc:
+                    _p(f"  insights.add failed for {stem}: {exc}")
                 any_failed = any(
                     isinstance(r, dict) and r.get("error") and not r.get("detected")
                     for r in results.values()
@@ -965,6 +977,13 @@ def run_pipeline(args):
     _p()
     write_summary_csvs(status, output_root)
     write_latlong_csv(status, output_root / "latlong_records.csv")
+
+    try:
+        md_path, json_path = insights.write()
+        _p(f"  run_insights.md  -> {md_path}")
+        _p(f"  run_insights.json -> {json_path}")
+    except Exception as exc:
+        _p(f"  insights.write failed: {exc}")
 
 
 def print_status(status_csv: Path):

@@ -1,30 +1,47 @@
 import logging
-import os
+from pathlib import Path
+
+_FMT = logging.Formatter(
+    "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
 
 
-def get_logger(name: str, log_dir: str = "logs") -> logging.Logger:
+def get_logger(name: str) -> logging.Logger:
+    """Console-only module logger. Call with __name__."""
+    logger = logging.getLogger(name)
+    if not logger.handlers:
+        logger.setLevel(logging.DEBUG)
+        sh = logging.StreamHandler()
+        sh.setLevel(logging.INFO)
+        sh.setFormatter(_FMT)
+        logger.addHandler(sh)
+    return logger
+
+
+def get_pdf_logger(pdf_stem: str, log_path: Path) -> logging.Logger:
     """
-    Returns a named logger that writes to stdout at INFO level.
-    One logger per module — call with __name__ at the top of each file.
-
-    Usage:
-        from utils.logging_utils import get_logger
-        logger = get_logger(__name__)
-        logger.info("Processing file: %s", pdf_path)
+    Logger that writes DEBUG+ to a per-PDF file and INFO+ to console.
+    Creates a uniquely named logger so it doesn't pollute the root namespace.
     """
-    os.makedirs(log_dir, exist_ok=True)
-
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    name = f"pdf.{pdf_stem}"
     logger = logging.getLogger(name)
 
-    if not logger.handlers:
-        logger.setLevel(logging.INFO)
-        handler = logging.StreamHandler()
-        handler.setFormatter(
-            logging.Formatter(
-                "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-                datefmt="%Y-%m-%d %H:%M:%S",
-            )
-        )
-        logger.addHandler(handler)
+    if logger.handlers:
+        return logger
+
+    logger.setLevel(logging.DEBUG)
+    logger.propagate = False
+
+    sh = logging.StreamHandler()
+    sh.setLevel(logging.INFO)
+    sh.setFormatter(_FMT)
+    logger.addHandler(sh)
+
+    fh = logging.FileHandler(log_path, mode="a", encoding="utf-8")
+    fh.setLevel(logging.DEBUG)
+    fh.setFormatter(_FMT)
+    logger.addHandler(fh)
 
     return logger

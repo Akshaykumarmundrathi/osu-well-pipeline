@@ -1,190 +1,125 @@
-import os
+"""
+Location (Section / Township / Range) extraction pipeline.
+
+process_single_location(manager, output_dir, pdf_stem, logger) → dict
+  {detected, page, section, township, range, raw_text, confidence,
+   image_path, annotated_path}
+
+Scans all pages (expected ≤2), stops at first page with grouped STR keywords.
+"""
+
 import io
+import logging
+import re
+from pathlib import Path
 
 from google.cloud import vision
 
-from config import PDF_FOLDER, LOCATION_OUTPUT_FOLDER, LOCATION_KEYWORDS
-from pdf.pdf_manager import PDFDocumentManager
-from ocr.vision_api import detect_text_with_vision
+from config import LOCATION_KEYWORDS, RESOLUTION_MULTIPLIER
 from location.grouping import (
-    find_keywords_lists,
     choose_group,
+    find_keywords_lists,
     get_unified_bounding_box,
 )
+from ocr.vision_api import detect_text_with_vision
+from pdf.pdf_manager import PDFDocumentManager
+from utils.io_utils import annotate_page
 
 
-def find_relevant_page_with_vision(
-    pdf_path,
-    keywords,
-    extend_right=400,
-    padding_height=50
-):
+def _extract_str(raw: str) -> tuple[str, str, str]:
+    sec = re.search(r"sec(?:tion)?\.?\s*(\d+)", raw, re.I)
+    twp = re.search(r"t(?:ownship|wn|vp|wp)\.?\s*([\d]+\s*[NS]?)", raw, re.I)
+    rng = re.search(r"r(?:ange|ge)\.?\s*([\d]+\s*[EW]?)", raw, re.I)
+    return (
+        sec.group(1).strip() if sec else "",
+        twp.group(1).strip() if twp else "",
+        rng.group(1).strip() if rng else "",
+    )
+
+
+def _ocr_crop(crop) -> str:
+    buf = io.BytesIO()
+    crop.convert("RGB").save(buf, format="PNG")
+    client   = vision.ImageAnnotatorClient()
+    response = client.text_detection(image=vision.Image(content=buf.getvalue()))
+    texts    = response.text_annotations
+    return texts[0].description.strip() if texts else ""
+
+
+def process_single_location(
+    manager: PDFDocumentManager,
+    output_dir: Path,
+    pdf_stem: str,
+    logger: logging.Logger | None = None,
+    extend_right: int = 500,
+    padding_height: int = 50,
+    section_right_extension: int = 200,
+) -> dict:
     """
-    Processes every page of the PDF using centralized PDF manager.
-
-    For each page:
-      - Converts page to PIL image
-      - Runs Vision OCR
-      - Finds grouped Section/Township/Range keywords
-
-    Returns:
-        (page_num, group, text_annotations)
+    Scans all pages for grouped Section/Township/Range keywords.
+    Crops and saves the region on first match.
     """
-    manager = PDFDocumentManager(pdf_path, resolution_multiplier=2)
+    log = logger or logging.getLogger(__name__)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    result = {
+        "detected": False, "page": None,
+        "section": "", "township": "", "range": "",
+        "raw_text": "", "confidence": 0,
+        "image_path": None, "annotated_path": None,
+    }
 
     try:
-        for page_num, image in manager.iter_pil_pages():
-
-            text_annotations = detect_text_with_vision(image)
-
-            print(f"\nDetected text annotations on page {page_num}:")
-
-            if not text_annotations:
+        for page_num, pil_image in manager.iter_pil_pages():
+            annotations = detect_text_with_vision(pil_image)
+            if not annotations:
                 continue
 
             sections, townships, ranges = find_keywords_lists(
-                text_annotations,
-                keywords,
-                extend_right,
-                padding_height
+                annotations, LOCATION_KEYWORDS, extend_right, padding_height
             )
-
             group = choose_group(sections, townships, ranges, min_overlap=0.5)
+            if group is None:
+                continue
 
-            if group is not None:
-                print(f"Found grouped keywords on page {page_num}.")
-                return (
-                    page_num - 1,  # return 0-indexed for downstream use
-                    group,
-                    text_annotations
-                )
+            unified_box = get_unified_bounding_box(group, section_right_extension)
+            if unified_box is None:
+                continue
 
-    except Exception as e:
-        print(f"Error processing PDF for vision grouping: {e}")
+            pw, ph = pil_image.size
+            x0, y0 = max(0, int(unified_box[0])), max(0, int(unified_box[1]))
+            x1, y1 = min(pw, int(unified_box[2])), min(ph, int(unified_box[3]))
+            if x1 <= x0 or y1 <= y0:
+                continue
 
-    print("No relevant grouping found with all keywords in the same area.")
-    return None, None, None
+            crop = pil_image.crop((x0, y0, x1, y1))
 
+            crop_path = output_dir / f"{pdf_stem}_page_{page_num:02d}_location_crop.png"
+            crop.save(str(crop_path))
 
-def process_relevant_page_and_extract_unified_value(
-    pdf_path,
-    page_num,
-    group,
-    output_folder,
-    section_right_extension=200
-):
-    """
-    For the selected page:
-    - Computes unified bounding box
-    - Crops target region
-    - Saves cropped image
-    - Runs OCR on cropped region
+            ann_path  = output_dir / f"{pdf_stem}_page_{page_num:02d}_location_page.png"
+            annotate_page(pil_image, (x0, y0, x1, y1),
+                          color="blue", label="STR").save(str(ann_path))
 
-    Uses centralized PDFDocumentManager instead of reopening PDFs manually.
-    """
-    unified_box = get_unified_bounding_box(group, section_right_extension)
+            raw_text  = _ocr_crop(crop)
+            sec, twp, rng = _extract_str(raw_text)
+            found = sum(bool(v) for v in (sec, twp, rng))
+            conf  = (found * 100) // 3
 
-    if unified_box is None:
-        print("No unified bounding box found.")
-        return
-
-    manager = PDFDocumentManager(pdf_path, resolution_multiplier=2)
-    cropped_image = None
-
-    # Centralized PDF access — iter_pil_pages() returns 1-indexed pages
-    for current_page_num, image in manager.iter_pil_pages():
-        if current_page_num == (page_num + 1):
-            cropped_image = image.crop(tuple(unified_box))
-            break
-
-    if cropped_image is None:
-        print(f"Could not retrieve page {page_num + 1}")
-        return
-
-    pdf_basename = os.path.splitext(os.path.basename(pdf_path))[0]
-    cropped_filename = os.path.join(
-        output_folder,
-        f"{pdf_basename}_page_{page_num + 1}_unified_value.png"
-    )
-    cropped_image.save(cropped_filename)
-    print(f"Unified value area saved as {cropped_filename}")
-
-    # OCR on cropped image
-    image_byte_array = io.BytesIO()
-    cropped_image.save(image_byte_array, format="PNG")
-    image_bytes = image_byte_array.getvalue()
-
-    client = vision.ImageAnnotatorClient()
-    vision_image = vision.Image(content=image_bytes)
-    response = client.text_detection(image=vision_image)
-    texts = response.text_annotations
-
-    if texts:
-        value = texts[0].description.strip()
-        print(f"Extracted unified value: {value}")
-    else:
-        print("No unified value detected.")
-
-
-def process_pdf_with_keywords(
-    pdf_path,
-    keywords,
-    output_folder,
-    extend_right=400,
-    padding_height=50,
-    section_right_extension=200
-):
-    """
-    Processes a single PDF by finding a page where the grouped keywords appear together.
-    Then it crops that unified area and extracts its text.
-    """
-    page_num, group, text_annotations = find_relevant_page_with_vision(
-        pdf_path, keywords, extend_right, padding_height
-    )
-    if page_num is not None:
-        process_relevant_page_and_extract_unified_value(
-            pdf_path, page_num, group, output_folder, section_right_extension
-        )
-    else:
-        print(f"No relevant page detected in {pdf_path} based on grouping criteria.")
-
-
-def process_all_pdfs_in_folder(
-    folder_path,
-    keywords,
-    output_folder,
-    extend_right=400,
-    padding_height=50,
-    section_right_extension=200
-):
-    """
-    Loops through all files in the specified folder.
-    For each PDF file, processes it using the above functions.
-    Cropped (unified) images will be saved with filenames including the original PDF file's name.
-    """
-    os.makedirs(output_folder, exist_ok=True)
-    for file_name in os.listdir(folder_path):
-        if file_name.lower().endswith(".pdf"):
-            pdf_path = os.path.join(folder_path, file_name)
-            print(f"\nProcessing file: {pdf_path}")
-            process_pdf_with_keywords(
-                pdf_path, keywords, output_folder,
-                extend_right, padding_height, section_right_extension
+            log.info("Location — page %d  sec=%s  twp=%s  rng=%s  conf=%d",
+                     page_num, sec, twp, rng, conf)
+            result.update(
+                detected=True, page=page_num,
+                section=sec, township=twp, range=rng,
+                raw_text=raw_text, confidence=conf,
+                image_path=str(crop_path),
+                annotated_path=str(ann_path),
             )
-        else:
-            print(f"Skipping non-PDF file: {file_name}")
+            return result
 
+    except Exception as exc:
+        log.error("Location extraction error: %s", exc, exc_info=True)
+        result["error"] = str(exc)
 
-def stage_location_extraction():
-    print("▶ Stage 1: Location (Section/Township/Range) Extraction")
-
-    os.makedirs(LOCATION_OUTPUT_FOLDER, exist_ok=True)
-
-    process_all_pdfs_in_folder(
-        folder_path=PDF_FOLDER,
-        keywords=LOCATION_KEYWORDS,
-        output_folder=LOCATION_OUTPUT_FOLDER,
-        extend_right=500,
-        padding_height=50,
-        section_right_extension=200
-    )
+    log.warning("No STR location found")
+    return result

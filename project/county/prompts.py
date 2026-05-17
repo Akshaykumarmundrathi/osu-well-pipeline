@@ -1,85 +1,43 @@
 import google.generativeai as genai
 
 from config import (
+    COUNTY_LIST_CLEAN,
     MODEL_FLASH_NAME,
     MODEL_PRO_NAME,
-    COUNTY_LIST_CLEAN,
     VALID_COUNTY_LIST_ORIGINAL,
 )
+
+_county_list_str  = ", ".join(f"'{c}'" for c in COUNTY_LIST_CLEAN)
+_county_full_str  = ", ".join(f"'{n}'" for n in VALID_COUNTY_LIST_ORIGINAL)
+
+prompt_pass1 = f"""Analyze this image snippet from an Oklahoma well record form.
+
+Find the Oklahoma county base name next to the word 'County'.
+
+Valid base names: {_county_list_str}
+
+Respond ONLY with the matching base name in lowercase (e.g. "creek", "okmulgee").
+If nothing matches, respond ONLY with: Not detected."""
+
+prompt_pass2 = f"""Analyze this image snippet from an Oklahoma well record form.
+
+Identify the most likely Oklahoma county name shown.
+
+Valid county names: {_county_full_str}
+
+Respond ONLY with the best candidate using standard capitalization
+(e.g. "Creek County", "Okmulgee County").
+If nothing matches, respond ONLY with: Not detected."""
 
 
 def setup_gemini():
     """
-    Initializes Gemini Flash & Pro models.
-
-    Returns
-    -------
-    model_flash : GenerativeModel
-    model_pro   : GenerativeModel
-    gen_config  : GenerationConfig
+    Initialises Gemini Flash and Pro models.
+    Requires GOOGLE_API_KEY environment variable.
+    Returns (model_flash, model_pro, generation_config).
     """
     genai.configure()
-
-    model_flash = genai.GenerativeModel(MODEL_FLASH_NAME)
-    model_pro   = genai.GenerativeModel(MODEL_PRO_NAME)
-
-    generation_config_pro = genai.types.GenerationConfig(
-        candidate_count=1,
-        temperature=0.0
-    )
-
-    return model_flash, model_pro, generation_config_pro
-
-
-# =====================================================
-# PROMPT CONTEXT STRINGS
-# =====================================================
-
-county_list_context_str = ", ".join(
-    f"'{name}'" for name in VALID_COUNTY_LIST_ORIGINAL
-)
-
-prompt_pass1 = f"""
-Analyze the provided image snippet from a well record form.
-
-Identify if any of the following specific Oklahoma county base names
-are present anywhere in the image text.
-
-It would be right next to the word 'County'.
-
-Valid Oklahoma county base names include:
-{", ".join(f"'{c}'" for c in COUNTY_LIST_CLEAN)}
-
-Read the text carefully.
-
-If you find text matching one of the base names,
-respond ONLY with that matching base name in lowercase
-(e.g., "creek", "okmulgee").
-
-If multiple match, return the most likely one based on context.
-
-If NO base name is identifiable, respond ONLY with:
-Not detected.
-"""
-
-prompt_pass2 = f"""
-Analyze the provided image snippet from a well record form,
-likely containing a county name.
-
-Identify the most likely Oklahoma county name shown in the image.
-
-Valid Oklahoma county names include:
-{county_list_context_str}
-
-Read the text carefully.
-
-Determine the most probable county name based on the visual text
-and the list.
-
-Respond ONLY with the best candidate county name using standard
-capitalization (e.g., "Creek County", "Okmulgee", "Washington").
-
-If NO county name seems present or identifiable from the list,
-respond ONLY with:
-Not detected.
-"""
+    flash = genai.GenerativeModel(MODEL_FLASH_NAME)
+    pro   = genai.GenerativeModel(MODEL_PRO_NAME)
+    gen_config = genai.types.GenerationConfig(candidate_count=1, temperature=0.0)
+    return flash, pro, gen_config

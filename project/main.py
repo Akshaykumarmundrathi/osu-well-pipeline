@@ -15,6 +15,8 @@ import argparse
 import atexit
 import csv
 import json
+import multiprocessing as mp
+import os
 import sys
 import time
 from datetime import datetime, timezone
@@ -25,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from config import (
     ALL_STAGES, DATASET_INDEX_CSV, FAILED_RECORDS_CSV,
+    LATLONG_MIN_COLLECTION_NUM,
     OUTPUT_ROOT, PROCESSING_STATUS_CSV,
     RESOLUTION_MULTIPLIER, SOURCE_ROOT,
     STAGE_COUNTY, STAGE_GRID, STAGE_LATLONG, STAGE_LOCATION,
@@ -429,7 +432,162 @@ def write_latlong_csv(status: ProcessingStatus, output_path: Path):
     _p(f"  Lat/Lon CSV written  ({count:,} records with coordinates)  ->  {output_path}")
 
 
-# -- Per-record processing -----------------------------------------------------
+# -- Per-record processing (parallel-safe worker) ------------------------------
+
+def _record_status_text(stages_run: dict, stages: tuple) -> str:
+    """Return the OK / PARTIAL / FAILED summary as a single string (no print)."""
+    failed   = [s for s in stages if isinstance(stages_run.get(s), dict)
+                and stages_run[s].get("error")
+                and not stages_run[s].get("detected")]
+    skipped  = [s for s in stages if stages_run.get(s) == SKIPPED]
+    core     = [s for s in stages if s != STAGE_LATLONG and s not in skipped]
+    missing  = [s for s in core
+                if not (isinstance(stages_run.get(s), dict)
+                        and stages_run[s].get("detected"))]
+    if failed:
+        tag = f"FAILED  ({', '.join(failed)})"
+    elif not missing:
+        tag = "OK"
+    else:
+        tag = f"PARTIAL  (not found: {', '.join(missing)})"
+    return f"  {'':>{_COL}}{tag}"
+
+
+def _process_record_worker(arg):
+    """
+    Multiprocessing-friendly worker. Runs the full stage pipeline for one
+    record, returning  (pdf_stem, stage_results_dict, console_lines).
+
+    All side effects that are unique-per-record (per-PDF log file, crop
+    images, metadata.json) happen inside the worker — no contention.
+    Shared state (status CSV, failed_records.csv, console) is left to the
+    parent which applies the returned `results` via _apply_results().
+
+    Argument tuple is positional so it's cheap to pickle:
+      (record, stages, output_root_str, resume, prior_row, record_num, total)
+    """
+    record, stages, output_root_str, resume, prior_row, record_num, total = arg
+    paths   = OutputPathBuilder(Path(output_root_str))
+    pdf_log = get_pdf_logger(record.pdf_stem, paths.log_path(record))
+    pdf_log.debug("=== START %s ===", record.pdf_stem)
+
+    well_name = _well_name_from_stem(record.pdf_stem)
+    lines: list[str] = []
+
+    # -- Open the PDF -----------------------------------------------------------
+    try:
+        manager = _make_manager(record)
+        pages   = manager.page_count()
+        pdf_log.debug("pages: %d", pages)
+    except Exception as exc:
+        pdf_log.error("Cannot open PDF: %s", exc)
+        lines.append("")
+        lines.append(f"  [{record_num:>7,} / {total:,}]  {well_name}")
+        lines.append(f"  {'ERROR':<{_COL}}Cannot open PDF -- {exc}")
+        return (
+            record.pdf_stem,
+            {s: {"detected": False, "error": f"open_failed: {exc}"} for s in stages},
+            lines,
+        )
+
+    lines.append("")
+    lines.append(f"  [{record_num:>7,} / {total:,}]  {well_name}")
+    lines.append(f"  {'':>{_COL}}{record.collection or ''} | {record.year or ''} "
+                 f"| {record.month or ''}  "
+                 f"({pages} page{'s' if pages != 1 else ''})")
+
+    results: dict = {}
+    stage_dirs = {
+        STAGE_LATLONG:  paths.grids_dir(record),
+        STAGE_GRID:     paths.grids_dir(record),
+        STAGE_LOCATION: paths.locations_dir(record),
+        STAGE_COUNTY:   paths.counties_dir(record),
+    }
+
+    for stage in stages:
+        label = _STAGE_LABEL.get(stage, stage)
+
+        # Resume: already done in a prior run.
+        if resume and prior_row.get(f"{stage}_status") == DONE:
+            lines.append(f"  {label:<{_COL}}already done")
+            results[stage] = {"detected": True, "_was_done": True}
+            continue
+
+        # Latlong collection gate.
+        if stage == STAGE_LATLONG:
+            cnum = record.collection_num or 0
+            if cnum and cnum < LATLONG_MIN_COLLECTION_NUM:
+                lines.append(
+                    f"  {label:<{_COL}}skipped  "
+                    f"(collection #{cnum} < {LATLONG_MIN_COLLECTION_NUM})"
+                )
+                results[stage] = SKIPPED
+                continue
+
+        # Skip grid + location when lat/lon was already found (this run or prior).
+        if stage in (STAGE_GRID, STAGE_LOCATION):
+            ll_found = (
+                results.get(STAGE_LATLONG, {}).get("detected", False)
+                or (bool(prior_row.get("latlong_lat"))
+                    and bool(prior_row.get("latlong_lon")))
+            )
+            if ll_found:
+                lines.append(f"  {label:<{_COL}}skipped  (lat/lon found in document)")
+                results[stage] = SKIPPED
+                continue
+
+        t0 = time.monotonic()
+        try:
+            r = _dispatch(stage, manager, stage_dirs[stage],
+                          record.pdf_stem, pdf_log)
+        except Exception as exc:
+            pdf_log.error("[%s] unhandled exception: %s", stage.upper(), exc,
+                          exc_info=True)
+            r = {"detected": False, "error": str(exc)}
+        elapsed = time.monotonic() - t0
+        pdf_log.debug("[%s] %.1fs detected=%s", stage.upper(), elapsed,
+                      r.get("detected"))
+
+        lines.append(f"  {label:<{_COL}}{_format_stage_result(stage, r, elapsed)}")
+        results[stage] = r
+
+    lines.append(_record_status_text(results, stages))
+
+    # Write per-record metadata.json from real (non-skipped, non-was_done) results.
+    real = {k: v for k, v in results.items()
+            if isinstance(v, dict) and not v.get("_was_done")}
+    if real:
+        try:
+            write_metadata(record, real, paths)
+        except Exception as exc:
+            pdf_log.error("metadata write failed: %s", exc)
+
+    pdf_log.debug("=== END %s ===", record.pdf_stem)
+    return record.pdf_stem, results, lines
+
+
+def _apply_results(record: DatasetRecord, stages: tuple,
+                   results: dict, status: ProcessingStatus):
+    """
+    Mirror the inline status mutations the original sequential worker did.
+    Called from the parent process so the master ProcessingStatus and
+    failed_records.csv are updated from a single writer.
+    """
+    for stage in stages:
+        r = results.get(stage)
+        if r == SKIPPED:
+            status.mark_skipped(record.pdf_stem, stage)
+            continue
+        if isinstance(r, dict):
+            if r.get("_was_done"):
+                continue   # nothing to do; status already DONE from prior run
+            if r.get("error") and not r.get("detected"):
+                err = r["error"]
+                status.mark_failed(record.pdf_stem, stage, err)
+                _append_failed(record, stage, err)
+            else:
+                status.mark_done(record.pdf_stem, stage, r)
+
 
 def run_one_record(
     record: DatasetRecord,
@@ -441,103 +599,17 @@ def run_one_record(
     total: int = 0,
 ) -> dict:
     """
-    Process a single PDF through the given stages.
-    - Opens the PDF (failure marks ALL stages failed and returns {})
-    - For each stage: skip if already done (resume); skip grid/location
-      when lat/lon was found; otherwise dispatch and record result.
-    - Writes per-stage status + a metadata.json for stages that actually ran.
-    Returns the per-stage results dict.
+    Sequential entry point. Calls the worker inline, prints its lines,
+    applies its results to `status`. Kept for callers that already pass
+    a status object (e.g. _retry_record).
     """
-    pdf_log = get_pdf_logger(record.pdf_stem, paths.log_path(record))
-    pdf_log.debug("=== START %s ===", record.pdf_stem)
-
-    well_name = _well_name_from_stem(record.pdf_stem)
-
-    # Open PDF
-    try:
-        manager = _make_manager(record)
-        pages   = manager.page_count()
-        pdf_log.debug("pages: %d", pages)
-    except Exception as exc:
-        pdf_log.error("Cannot open PDF: %s", exc)
-        _record_header(record_num, total, well_name,
-                       record.collection, record.year, record.month, 0)
-        _p(f"  {'ERROR':<{_COL}}Cannot open PDF -- {exc}")
-        for stage in stages:
-            status.mark_failed(record.pdf_stem, stage, f"open_failed: {exc}")
-            _append_failed(record, stage, str(exc))
-        return {}
-
-    _record_header(record_num, total, well_name,
-                   record.collection, record.year, record.month, pages)
-
-    results: dict = {}   # stage -> result dict or SKIPPED sentinel
-    stage_dirs = {
-        STAGE_LATLONG:  paths.grids_dir(record),  # latlong writes no images
-        STAGE_GRID:     paths.grids_dir(record),
-        STAGE_LOCATION: paths.locations_dir(record),
-        STAGE_COUNTY:   paths.counties_dir(record),
-    }
-
-    for stage in stages:
-        label = _STAGE_LABEL.get(stage, stage)
-
-        if resume and status.is_done(record.pdf_stem, stage):
-            _stage_line(label, "already done")
-            results[stage] = {"detected": True, "_was_done": True}
-            continue
-
-        # Skip grid + location when lat/lon already found
-        if stage in (STAGE_GRID, STAGE_LOCATION):
-            ll_found = (
-                results.get(STAGE_LATLONG, {}).get("detected", False)
-                or status.latlong_detected(record.pdf_stem)
-            )
-            if ll_found:
-                _stage_line(label, "skipped  (lat/lon found in document)")
-                status.mark_skipped(record.pdf_stem, stage)
-                results[stage] = SKIPPED
-                continue
-
-        _stage_start(label)
-        t0 = time.monotonic()
-
-        try:
-            r = _dispatch(stage, manager, stage_dirs[stage],
-                          record.pdf_stem, pdf_log)
-        except Exception as exc:
-            pdf_log.error("[%s] unhandled exception: %s", stage.upper(), exc,
-                          exc_info=True)
-            r = {"detected": False, "error": str(exc)}
-
-        elapsed = time.monotonic() - t0
-        pdf_log.debug("[%s] %.1fs detected=%s", stage.upper(), elapsed,
-                      r.get("detected"))
-
-        # Print result on same line as label
-        print(_format_stage_result(stage, r, elapsed), flush=True)
-        results[stage] = r
-
-        if r.get("error") and not r.get("detected"):
-            err = r["error"]
-            status.mark_failed(record.pdf_stem, stage, err)
-            _append_failed(record, stage, err)
-        else:
-            status.mark_done(record.pdf_stem, stage, r)
-
-    # Status summary line
-    _record_status_line(results, stages)
-
-    if any(v not in (SKIPPED,) and not isinstance(v, dict)
-           or isinstance(v, dict) and not v.get("_was_done")
-           for v in results.values()):
-        real = {k: v for k, v in results.items()
-                if isinstance(v, dict) and not v.get("_was_done")}
-        if real:
-            mp = write_metadata(record, real, paths)
-            pdf_log.debug("metadata -> %s", mp)
-
-    pdf_log.debug("=== END %s ===", record.pdf_stem)
+    prior = dict(status._rows.get(record.pdf_stem, {}))
+    arg   = (record, stages, str(paths.root), resume, prior,
+             record_num, total)
+    _stem, results, lines = _process_record_worker(arg)
+    for ln in lines:
+        _p(ln)
+    _apply_results(record, stages, results, status)
     return results
 
 
@@ -791,6 +863,7 @@ def run_pipeline(args):
     record_num = 0
     year_group_records: list = []
     prev_year_key: tuple | None = None
+    workers = max(1, int(getattr(args, "workers", 1) or 1))
 
     for (collection, year, month), month_recs in month_groups:
         cur_year_key = (collection, year)
@@ -805,37 +878,53 @@ def run_pipeline(args):
 
         month_done = month_failed = month_skipped = 0
 
+        # Pre-filter resume-skips and assign stable record numbers.
+        work_items: list = []
+        record_by_stem: dict = {}
         for record in month_recs:
             record_num += 1
-
             if args.resume and all(status.is_done(record.pdf_stem, s) for s in stages):
                 month_skipped += 1
                 total_skipped += 1
                 continue
+            prior = dict(status._rows.get(record.pdf_stem, {}))
+            work_items.append((record, stages, str(paths.root), args.resume,
+                               prior, record_num, len(records)))
+            record_by_stem[record.pdf_stem] = record
 
-            try:
-                results = run_one_record(
-                    record, stages, paths, status,
-                    resume=args.resume,
-                    record_num=record_num, total=len(records),
-                )
+        def _consume(result_iter):
+            """Print + apply each worker result as it arrives."""
+            nonlocal month_done, month_failed, total_done, total_failed
+            for stem, results, lines in result_iter:
+                for ln in lines:
+                    _p(ln)
+                rec = record_by_stem.get(stem)
+                if rec is None:
+                    continue
+                try:
+                    _apply_results(rec, stages, results, status)
+                except Exception as exc:
+                    _p(f"  apply_results failed for {stem}: {exc}")
                 any_failed = any(
                     isinstance(r, dict) and r.get("error") and not r.get("detected")
                     for r in results.values()
                 )
                 if any_failed:
-                    month_failed += 1
-                    total_failed += 1
+                    month_failed += 1; total_failed += 1
                 else:
-                    month_done   += 1
-                    total_done   += 1
-            except Exception as exc:
-                _p(f"  FATAL error on {record.pdf_stem}: {exc}")
-                for s in stages:
-                    status.mark_failed(record.pdf_stem, s, str(exc))
-                _append_failed(record, "pipeline", str(exc))
-                month_failed += 1
-                total_failed += 1
+                    month_done   += 1; total_done   += 1
+
+        if not work_items:
+            pass
+        elif workers <= 1:
+            # Sequential: still goes through the worker (single code path).
+            _consume(_process_record_worker(w) for w in work_items)
+        else:
+            # Parallel: imap_unordered streams results back as soon as they finish.
+            # chunksize=1 keeps memory low and lets fast records report quickly.
+            with mp.Pool(processes=workers) as pool:
+                _consume(pool.imap_unordered(_process_record_worker,
+                                             work_items, chunksize=1))
 
         # Month summary
         _p(f"\n  Month complete: {month_done} done | {month_failed} failed | {month_skipped} skipped")
@@ -910,6 +999,9 @@ def main():
     ap.add_argument("--index",     type=Path, default=DATASET_INDEX_CSV)
     ap.add_argument("--output",    type=Path, default=OUTPUT_ROOT)
     ap.add_argument("--status",    action="store_true")
+    ap.add_argument("--workers",   type=int, default=1,
+                    help="Parallel worker processes (default 1 = sequential). "
+                         "Set to N <= os.cpu_count() for ~Nx speedup.")
     ap.add_argument("--verbose",   action="store_true",
                     help="Show DEBUG output on console")
     args = ap.parse_args()

@@ -59,6 +59,28 @@ def _validate_section(s: str) -> str:
         return ""
 
 
+# Oklahoma townships max out around 29N / 8S; ranges around 26E / 23W. Anything
+# beyond 50 in either is OCR noise (e.g. "191" from concatenated tokens).
+_TWPRNG_MAX = 50
+
+
+def _validate_twprng(v: str) -> str:
+    """Bound township/range numeric part to 1..50; reject obvious OCR noise."""
+    if not v:
+        return ""
+    m = re.match(r"(\d{1,3})\s*([NSEWnsew]?)\b", v)
+    if not m:
+        return ""
+    try:
+        n = int(m.group(1))
+    except ValueError:
+        return ""
+    if not (1 <= n <= _TWPRNG_MAX):
+        return ""
+    suffix = m.group(2).upper()
+    return f"{n}{suffix}" if suffix else str(n)
+
+
 def _extract_str(raw: str) -> tuple[str, str, str]:
     """Pull (section, township, range) values from a free-text blob."""
     sec_m = _SEC_RE.search(raw)
@@ -66,8 +88,8 @@ def _extract_str(raw: str) -> tuple[str, str, str]:
     rng_m = _RNG_RE.search(raw)
 
     sec = _validate_section(_clean(sec_m.group(1)) if sec_m else "")
-    twp = _clean(twp_m.group(1)) if twp_m else ""
-    rng = _clean(rng_m.group(1)) if rng_m else ""
+    twp = _validate_twprng(_clean(twp_m.group(1)) if twp_m else "")
+    rng = _validate_twprng(_clean(rng_m.group(1)) if rng_m else "")
     return sec, twp, rng
 
 
@@ -111,8 +133,8 @@ def _per_keyword_extract(annotations, keyword_boxes: dict, page_w: int,
         return f"{digits}{suffix}" if suffix else digits
 
     sec = _validate_section(_first_value(keyword_boxes.get("section", [])))
-    twp = _first_value(keyword_boxes.get("township", []))
-    rng = _first_value(keyword_boxes.get("range",    []))
+    twp = _validate_twprng(_first_value(keyword_boxes.get("township", [])))
+    rng = _validate_twprng(_first_value(keyword_boxes.get("range",    [])))
     return sec, twp, rng
 
 

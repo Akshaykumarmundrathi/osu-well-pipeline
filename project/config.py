@@ -2,9 +2,21 @@ import os
 from pathlib import Path
 
 # -- Credentials ---------------------------------------------------------------
+# Credentials are loaded from environment variables only, NEVER from a path
+# baked into the repo. Set GOOGLE_APPLICATION_CREDENTIALS to the GCP
+# service-account JSON path; GOOGLE_API_KEY to your Gemini key.
+#
+# Local dev fallback: if a `credentials/` directory exists next to the project
+# root and contains exactly one *.json file, use it. This keeps developer
+# machines working without committing the customer's credential filename.
 _HERE = Path(__file__).parent
-GOOGLE_CREDS = _HERE.parent / "smiling-breaker-423712-h3-aff7ac746ad4.json"
-os.environ.setdefault("GOOGLE_APPLICATION_CREDENTIALS", str(GOOGLE_CREDS))
+_LOCAL_CREDS_DIR = _HERE.parent / "credentials"
+
+if not os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
+    if _LOCAL_CREDS_DIR.is_dir():
+        _candidates = sorted(_LOCAL_CREDS_DIR.glob("*.json"))
+        if len(_candidates) == 1:
+            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(_candidates[0])
 
 # -- Models --------------------------------------------------------------------
 MODEL_FLASH_NAME = "gemini-2.5-flash"
@@ -121,6 +133,8 @@ MAX_COUNTY_PAGES_RETRY   = 99
 # inspection of older ExportedFolderContents (N).zip archives confirms
 # decimal-degree coordinates were not yet recorded on the forms. Saves
 # one Vision API call per record (~50% of stage time for resume runs).
+# Authoritative source is now tier_for() + TIER_CONFIG['run_latlong'].
+# This constant is kept for backward compat with older code paths.
 LATLONG_MIN_COLLECTION_NUM = 11
 
 # -- Retry heuristics ----------------------------------------------------------
@@ -137,3 +151,62 @@ GRID_H_LOOSE  = (150, 1200)
 
 # -- Processing ----------------------------------------------------------------
 MAX_WORKERS = max(1, os.cpu_count() - 1)
+
+
+# -- Collection-tier dispatcher ------------------------------------------------
+# Manual inspection of the ZIP collections shows the form layout shifts
+# every few collections. Each tier names a strategy bundle the pipeline
+# can switch on.
+#
+#   early      (1-6)   sec/twp/rge keywords present + standard grid form
+#   transition (7-8)   mixed older / newer wells; sec/twp/rge usually present
+#   mid        (9-10)  "Location:" line dominates; sec/twp/rge less reliable
+#   late       (11-12) latitude/longitude often printed; "Location:" still common
+#   modern     (13+)   decimal degrees + "Location:" routine
+#
+# Use tier_for(collection_num) at any decision point that needs to vary by
+# decade. Update the boundaries here as more data comes in — never inline.
+TIER_EARLY      = "early"
+TIER_TRANSITION = "transition"
+TIER_MID        = "mid"
+TIER_LATE       = "late"
+TIER_MODERN     = "modern"
+
+_TIER_BOUNDARIES = [
+    (1,   6,   TIER_EARLY),
+    (7,   8,   TIER_TRANSITION),
+    (9,   10,  TIER_MID),
+    (11,  12,  TIER_LATE),
+    (13,  9999, TIER_MODERN),
+]
+
+
+def tier_for(collection_num: int | None) -> str:
+    """
+    Map a collection number to its strategy tier. Unknown/zero values
+    fall back to 'early' (the most conservative regex-and-anchor stack).
+    """
+    if not collection_num:
+        return TIER_EARLY
+    for lo, hi, name in _TIER_BOUNDARIES:
+        if lo <= collection_num <= hi:
+            return name
+    return TIER_EARLY
+
+
+# Per-tier flags. Add knobs here as the pipeline grows; consumers should
+# look up via tier_for() then index this dict.
+TIER_CONFIG = {
+    TIER_EARLY:      {"run_latlong": False, "location_strategy": "str_keywords"},
+    TIER_TRANSITION: {"run_latlong": False, "location_strategy": "str_keywords"},
+    TIER_MID:        {"run_latlong": False, "location_strategy": "location_keyword"},
+    TIER_LATE:       {"run_latlong": True,  "location_strategy": "location_keyword"},
+    TIER_MODERN:     {"run_latlong": True,  "location_strategy": "location_keyword"},
+}
+
+# Keywords used by the new 'Location:' extractor in mid/late/modern tiers.
+# Variants account for OCR drops (the colon often isn't recognised).
+LOCATION_LINE_KEYWORDS = [
+    "location:", "location",  "locality:",  "locality",
+    "well location", "surface location", "spot well location",
+]

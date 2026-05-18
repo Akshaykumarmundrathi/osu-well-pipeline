@@ -524,13 +524,15 @@ def _process_record_worker(arg):
             results[stage] = {"detected": True, "_was_done": True}
             continue
 
-        # Latlong collection gate.
+        # Latlong collection gate (tier-aware).
         if stage == STAGE_LATLONG:
-            cnum = record.collection_num or 0
-            if cnum and cnum < LATLONG_MIN_COLLECTION_NUM:
+            from config import TIER_CONFIG, tier_for
+            tier  = tier_for(record.collection_num)
+            run_l = TIER_CONFIG.get(tier, {"run_latlong": False})["run_latlong"]
+            if not run_l:
                 lines.append(
                     f"  {label:<{_COL}}skipped  "
-                    f"(collection #{cnum} < {LATLONG_MIN_COLLECTION_NUM})"
+                    f"(tier '{tier}' has no lat/lon on form)"
                 )
                 results[stage] = SKIPPED
                 continue
@@ -550,7 +552,7 @@ def _process_record_worker(arg):
         t0 = time.monotonic()
         try:
             r = _dispatch(stage, manager, stage_dirs[stage],
-                          record.pdf_stem, pdf_log)
+                          record.pdf_stem, pdf_log, record=record)
         except Exception as exc:
             pdf_log.error("[%s] unhandled exception: %s", stage.upper(), exc,
                           exc_info=True)
@@ -629,9 +631,16 @@ def run_one_record(
 
 
 def _dispatch(stage: str, manager: PDFDocumentManager,
-              out_dir: Path, pdf_stem: str, log) -> dict:
-    """Route a stage name to its extractor entry point. Lazy-imports each
-    sub-module so a stage that's never invoked never pays the import cost."""
+              out_dir: Path, pdf_stem: str, log,
+              record: DatasetRecord | None = None) -> dict:
+    """
+    Route a stage name to its extractor entry point. Lazy-imports each
+    sub-module so a stage that's never invoked never pays the import cost.
+
+    Strategy selection is tier-aware: collections 9+ use the
+    'Location:' keyword extractor by default, while early collections
+    use the classic sec/twp/rge keyword pairing.
+    """
     if stage == STAGE_LATLONG:
         from latlong.latlong_extractor import process_single_latlong
         return process_single_latlong(manager, pdf_stem, log)
@@ -641,6 +650,19 @@ def _dispatch(stage: str, manager: PDFDocumentManager,
         return process_single_grid(manager, out_dir, pdf_stem, log)
 
     if stage == STAGE_LOCATION:
+        from config import TIER_CONFIG, tier_for
+        strategy = "str_keywords"
+        if record is not None:
+            strategy = TIER_CONFIG.get(
+                tier_for(record.collection_num),
+                {"location_strategy": "str_keywords"},
+            )["location_strategy"]
+        if strategy == "location_keyword":
+            from location.location_keyword_extractor import (
+                process_single_location_keyword,
+            )
+            return process_single_location_keyword(manager, out_dir,
+                                                   pdf_stem, log)
         from location.location_extractor import process_single_location
         return process_single_location(manager, out_dir, pdf_stem, log)
 

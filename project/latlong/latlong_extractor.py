@@ -27,7 +27,7 @@ from pdf.pdf_manager import PDFDocumentManager
 
 # -- Lat/lon patterns ----------------------------------------------------------
 
-# Labelled: "Lat: 36.123456"  "Longitude=-97.654321"  "LAT 36.12345"
+# Labelled decimal-degree: "Lat: 36.123456"  "Longitude=-97.654321"
 _RE_LAT_LABEL = re.compile(
     r'\blat(?:itude)?\s*[=:.]?\s*(-?\d{1,2}\.\d{4,})', re.I
 )
@@ -35,8 +35,27 @@ _RE_LON_LABEL = re.compile(
     r'\blon(?:gitude|g)?\s*[=:.]?\s*(-?1?[0-9]{1,2}\.\d{4,})', re.I
 )
 
-# Unlabelled: any decimal number with 4+ fractional digits
+# Unlabelled decimal-degree: any number with 4+ fractional digits
 _RE_DECIMAL = re.compile(r'-?\d{1,3}\.\d{4,}')
+
+# Degree-Minute-Second forms. Accepted separators are very permissive
+# because OCR turns degree/prime/double-prime marks into many characters:
+#   °  o  *  '  `  ´  "  ”  ‘   spaces, hyphens, commas, backticks
+# Captures: degrees, minutes, seconds (with optional fractional seconds),
+# and an optional N/S/E/W hemisphere letter.
+_DMS_SEP = r"[°ºo\*\'\`´\"”‘\s,\-]+"
+_RE_DMS = re.compile(
+    rf"""
+    (?P<deg>\d{{1,3}})            # degrees
+    {_DMS_SEP}
+    (?P<min>\d{{1,2}})            # minutes
+    {_DMS_SEP}
+    (?P<sec>\d{{1,2}}(?:[.,]\d+)?)# seconds (optional fractional part)
+    [°ºo\*\'\`´\"”‘\s,]*          # tolerate any trailing prime / quote / space
+    (?P<hemi>[NSEW])?             # optional hemisphere
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
 
 # -- Well type patterns --------------------------------------------------------
 
@@ -110,6 +129,65 @@ def _extract_labeled(text: str):
                 return lat, lon, 95
         except ValueError:
             pass
+    return None, None, 0
+
+
+def _dms_to_decimal(deg: str, minu: str, sec: str, hemi: str = "") -> float | None:
+    """
+    Convert a degree-minute-second triple to signed decimal degrees.
+    `hemi` is N/S/E/W (case-insensitive); S and W produce a negative result.
+    Returns None if any component is out of range.
+    """
+    try:
+        d = int(deg)
+        m = int(minu)
+        s = float(sec.replace(",", "."))
+    except (TypeError, ValueError):
+        return None
+    if not (0 <= d <= 180 and 0 <= m < 60 and 0 <= s < 60):
+        return None
+    decimal = d + m / 60.0 + s / 3600.0
+    if hemi and hemi.upper() in ("S", "W"):
+        decimal = -decimal
+    return decimal
+
+
+def _extract_dms(text: str):
+    """
+    Find DMS pairs in `text`. Returns (lat, lon, confidence) or
+    (None, None, 0).
+
+    Strategy: collect all DMS matches; prefer pairs where one has an N/S
+    hemisphere and the other E/W (high confidence). Fall back to the
+    first two consecutive matches where one parses as a valid lat and
+    the other as a valid lon.
+    """
+    candidates = []
+    for m in _RE_DMS.finditer(text):
+        val = _dms_to_decimal(m.group("deg"), m.group("min"),
+                              m.group("sec"), m.group("hemi") or "")
+        if val is None:
+            continue
+        hemi = (m.group("hemi") or "").upper()
+        candidates.append((val, hemi, m.start()))
+
+    if len(candidates) < 2:
+        return None, None, 0
+
+    # Strong path: explicit hemisphere on both
+    lat_cand = next((c for c in candidates if c[1] in ("N", "S")), None)
+    lon_cand = next((c for c in candidates if c[1] in ("E", "W")), None)
+    if lat_cand and lon_cand and _is_valid_lat(lat_cand[0]) \
+            and _is_valid_lon(lon_cand[0]):
+        return lat_cand[0], lon_cand[0], 90
+
+    # Weak path: first valid lat + lon pair, in text order
+    for i in range(len(candidates) - 1):
+        a, b = candidates[i][0], candidates[i + 1][0]
+        if _is_valid_lat(a) and _is_valid_lon(b) and a != b:
+            return a, b, 70
+        if _is_valid_lat(b) and _is_valid_lon(a) and a != b:
+            return b, a, 65   # order swapped
     return None, None, 0
 
 
@@ -187,7 +265,10 @@ def process_single_latlong(
 
             full_text = annotations[0].description if annotations else ""
 
+            # Try in order: labelled decimal -> DMS -> unlabelled decimal.
             lat, lon, conf = _extract_labeled(full_text)
+            if lat is None:
+                lat, lon, conf = _extract_dms(full_text)
             if lat is None:
                 lat, lon, conf = _extract_unlabeled(full_text)
 

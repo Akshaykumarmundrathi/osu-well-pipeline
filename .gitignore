@@ -13,6 +13,13 @@ build/
 credentials/
 *.json
 !aws/config/*.json
+!visualizer/package*.json
+
+### Visualizer — generated files (too large for git, rebuilt on demand)
+visualizer/well_locations.json
+visualizer/well_locations.csv
+visualizer/well_map_standalone.html
+visualizer/viewer_url.txt
 .env
 .env.*
 !.env.example

@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OSU Oklahoma Well Records — Interactive Map</title>
+
+<!-- Leaflet core -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<!-- Marker clustering -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css"/>
+<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body { font-family: 'Segoe UI', Arial, sans-serif; display: flex; flex-direction: column; height: 100vh; background: #1a1a2e; color: #eee; }
+
+  /* ── Header ── */
+  #header {
+    background: linear-gradient(135deg, #1B4F8A 0%, #0d2d52 100%);
+    padding: 10px 18px;
+    display: flex; align-items: center; gap: 14px;
+    box-shadow: 0 2px 8px rgba(0,0,0,.4);
+    flex-shrink: 0;
+  }
+  #header h1 { font-size: 17px; font-weight: 700; letter-spacing: .5px; }
+  #header .subtitle { font-size: 11px; color: #adc8e8; margin-top: 2px; }
+  #well-count-badge {
+    margin-left: auto; background: #e8a000; color: #000;
+    font-weight: 700; font-size: 12px; padding: 4px 10px;
+    border-radius: 12px; white-space: nowrap;
+  }
+
+  /* ── Main layout ── */
+  #main { display: flex; flex: 1; overflow: hidden; }
+
+  /* ── Sidebar ── */
+  #sidebar {
+    width: 300px; background: #16213e; border-right: 1px solid #2a3a5c;
+    display: flex; flex-direction: column; flex-shrink: 0; overflow: hidden;
+  }
+  #sidebar-inner { overflow-y: auto; flex: 1; padding: 12px; }
+  .section-label {
+    font-size: 10px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 1px; color: #5a8fc7; margin: 12px 0 6px;
+  }
+  input[type=text], select {
+    width: 100%; padding: 7px 10px; border: 1px solid #2a3a5c;
+    border-radius: 6px; background: #0f172a; color: #eee; font-size: 13px;
+    margin-bottom: 8px;
+  }
+  input[type=text]:focus, select:focus { outline: none; border-color: #3b82f6; }
+  button.filter-btn {
+    width: 100%; padding: 8px; border: none; border-radius: 6px;
+    background: #1B4F8A; color: #fff; font-size: 13px; font-weight: 600;
+    cursor: pointer; margin-bottom: 6px;
+  }
+  button.filter-btn:hover { background: #2563a0; }
+  button.reset-btn {
+    width: 100%; padding: 7px; border: 1px solid #2a3a5c; border-radius: 6px;
+    background: transparent; color: #aaa; font-size: 12px; cursor: pointer;
+  }
+  button.reset-btn:hover { background: #1e293b; color: #eee; }
+
+  /* Stats panel */
+  .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 8px; }
+  .stat-box {
+    background: #0f172a; border: 1px solid #2a3a5c; border-radius: 6px;
+    padding: 8px 10px; text-align: center;
+  }
+  .stat-box .val { font-size: 22px; font-weight: 700; color: #60a5fa; }
+  .stat-box .lbl { font-size: 10px; color: #888; margin-top: 2px; }
+
+  /* Legend */
+  .legend-row { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; font-size: 12px; cursor: pointer; }
+  .legend-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; border: 2px solid rgba(255,255,255,.3); }
+  .legend-row.hidden-decade .legend-dot { opacity: .3; }
+  .legend-row.hidden-decade span { color: #555; text-decoration: line-through; }
+
+  /* County list */
+  .county-item {
+    display: flex; justify-content: space-between; font-size: 11px;
+    padding: 3px 0; border-bottom: 1px solid #1e293b;
+  }
+  .county-bar { height: 4px; background: #3b82f6; border-radius: 2px; margin-top: 2px; }
+
+  /* ── Map ── */
+  #map { flex: 1; z-index: 1; }
+
+  /* ── Popup styling ── */
+  .leaflet-popup-content-wrapper {
+    background: #16213e; color: #eee; border: 1px solid #2a3a5c;
+    border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.5);
+    min-width: 270px; max-width: 340px;
+  }
+  .leaflet-popup-tip { background: #16213e; }
+  .leaflet-popup-content { margin: 0; padding: 0; }
+  .popup-header {
+    background: linear-gradient(135deg, #1B4F8A, #0d2d52);
+    padding: 12px 14px; border-radius: 10px 10px 0 0;
+  }
+  .popup-header .well-name { font-size: 15px; font-weight: 700; color: #fff; }
+  .popup-header .well-id  { font-size: 10px; color: #adc8e8; margin-top: 2px; }
+  .popup-body { padding: 12px 14px; }
+  .popup-row {
+    display: flex; justify-content: space-between;
+    font-size: 12px; padding: 4px 0; border-bottom: 1px solid #1e293b;
+  }
+  .popup-row:last-child { border-bottom: none; }
+  .popup-row .lbl { color: #888; }
+  .popup-row .val { color: #e2e8f0; text-align: right; max-width: 60%; word-break: break-word; }
+  .popup-row .val.good { color: #4ade80; }
+  .popup-row .val.warn { color: #fbbf24; }
+  .popup-footer { padding: 10px 14px 12px; border-top: 1px solid #1e293b; }
+  .pdf-link {
+    display: block; text-align: center; padding: 8px;
+    background: #1B4F8A; color: #fff; text-decoration: none;
+    border-radius: 6px; font-size: 12px; font-weight: 600;
+    transition: background .15s;
+  }
+  .pdf-link:hover { background: #2563a0; }
+  .s3-path {
+    font-size: 10px; color: #555; margin-top: 6px;
+    word-break: break-all; text-align: center;
+  }
+
+  /* Loading overlay */
+  #loading {
+    position: fixed; inset: 0; background: rgba(10,15,30,.92);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    z-index: 9999; transition: opacity .3s;
+  }
+  #loading .spinner {
+    width: 48px; height: 48px; border: 4px solid #1B4F8A;
+    border-top-color: #60a5fa; border-radius: 50%;
+    animation: spin 0.8s linear infinite; margin-bottom: 16px;
+  }
+  #loading p { color: #adc8e8; font-size: 14px; }
+  #loading #load-detail { color: #555; font-size: 11px; margin-top: 6px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: #0f172a; }
+  ::-webkit-scrollbar-thumb { background: #2a3a5c; border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<div id="loading">
+  <div class="spinner"></div>
+  <p>Loading Oklahoma Well Records...</p>
+  <p id="load-detail">Fetching location data from S3</p>
+</div>
+
+<div id="header">
+  <div>
+    <h1>OSU Oklahoma Well Records — Interactive Map</h1>
+    <div class="subtitle">Historical oil &amp; gas well permits 1911–2024 · Coordinates extracted via 4-stage OCR/AI pipeline</div>
+  </div>
+  <div id="well-count-badge">Loading...</div>
+</div>
+
+<div id="main">
+  <div id="sidebar">
+    <div id="sidebar-inner">
+
+      <!-- Stats -->
+      <div class="section-label">Dataset Statistics</div>
+      <div class="stat-grid">
+        <div class="stat-box"><div class="val" id="stat-total">—</div><div class="lbl">Wells Mapped</div></div>
+        <div class="stat-box"><div class="val" id="stat-counties">—</div><div class="lbl">Counties</div></div>
+        <div class="stat-box"><div class="val" id="stat-year-min">—</div><div class="lbl">Earliest Year</div></div>
+        <div class="stat-box"><div class="val" id="stat-year-max">—</div><div class="lbl">Latest Year</div></div>
+      </div>
+
+      <!-- Filters -->
+      <div class="section-label">Filter Wells</div>
+      <input type="text" id="search-county" placeholder="County name...">
+      <select id="filter-collection">
+        <option value="">All Collections</option>
+      </select>
+      <select id="filter-decade">
+        <option value="">All Decades</option>
+      </select>
+      <input type="text" id="search-wellname" placeholder="Well name or ID...">
+      <button class="filter-btn" onclick="applyFilters()">Apply Filters</button>
+      <button class="reset-btn" onclick="resetFilters()">Reset</button>
+
+      <!-- Legend -->
+      <div class="section-label">Decade Legend <span style="color:#555;font-size:10px;font-weight:400">(click to toggle)</span></div>
+      <div id="legend"></div>
+
+      <!-- Top Counties -->
+      <div class="section-label">Top Counties</div>
+      <div id="county-list"></div>
+
+      <!-- Data info -->
+      <div class="section-label">Data Source</div>
+      <div style="font-size:11px;color:#666;line-height:1.6">
+        Coordinates resolved via quadrant-direct mapping from PLSS grid dot positions on scanned well permit PDFs.
+        Source: OSU well records pipeline · AWS Batch · Gemini Flash/Pro AI extraction.
+        <br><br>
+        <strong style="color:#aaa">Last updated:</strong> <span id="data-updated">—</span>
+      </div>
+
+    </div>
+  </div>
+
+  <div id="map"></div>
+</div>
+
+<script>
+// ─── Configuration ────────────────────────────────────────────────────────────
+const BUCKET = "osu-well-records-225989338968";
+const DATA_URL = `https://${BUCKET}.s3.amazonaws.com/viewer/well_locations.json`;
+
+// Decade colors (dark-background-friendly)
+const DECADE_COLORS = {
+  "1910s": "#60a5fa",   // bright blue
+  "1920s": "#34d399",   // teal green
+  "1930s": "#a78bfa",   // purple
+  "1940s": "#fb923c",   // orange
+  "1950s": "#facc15",   // yellow
+  "1960s": "#f87171",   // coral
+  "1970s": "#38bdf8",   // sky blue
+  "1980s": "#4ade80",   // green
+  "1990s": "#e879f9",   // pink
+  "2000s": "#fda4af",   // rose
+  "2010s": "#c084fc",   // violet
+  "2020s": "#86efac",   // mint
+  "unknown": "#94a3b8"  // gray
+};
+
+// ─── State ────────────────────────────────────────────────────────────────────
+let allFeatures = [];
+let markerLayer;
+let map;
+let hiddenDecades = new Set();
+let currentFilters = {};
+
+// ─── Map init ─────────────────────────────────────────────────────────────────
+function initMap() {
+  map = L.map("map", {
+    center: [35.5, -97.5],   // Oklahoma centroid
+    zoom: 7,
+    preferCanvas: true
+  });
+
+  // Google Maps-style satellite/hybrid tiles (no key required via this provider)
+  const streets = L.tileLayer(
+    "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+    { attribution: "© OpenStreetMap © CartoDB", subdomains: "abcd", maxZoom: 20 }
+  ).addTo(map);
+
+  const satellite = L.tileLayer(
+    "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    { attribution: "© Esri World Imagery", maxZoom: 20 }
+  );
+
+  const hybrid = L.tileLayer(
+    "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
+    { attribution: "© Esri", maxZoom: 20, opacity: 0.7 }
+  );
+
+  const roadmap = L.tileLayer(
+    "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+    { attribution: "© OpenStreetMap", maxZoom: 20 }
+  );
+
+  const baseMaps = {
+    "Dark (default)": streets,
+    "Satellite": satellite,
+    "Roadmap": roadmap
+  };
+  L.control.layers(baseMaps, {}, { position: "topright" }).addTo(map);
+
+  // Scale
+  L.control.scale({ imperial: true, metric: true }).addTo(map);
+}
+
+// ─── Marker creation ──────────────────────────────────────────────────────────
+function makeIcon(decade, confidence) {
+  const color = DECADE_COLORS[decade] || DECADE_COLORS["unknown"];
+  const size  = confidence > 90 ? 10 : confidence > 70 ? 8 : 6;
+  const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='${size+4}' height='${size+4}'>
+    <circle cx='${(size+4)/2}' cy='${(size+4)/2}' r='${size/2}'
+      fill='${color}' stroke='rgba(0,0,0,0.5)' stroke-width='1.5' opacity='0.85'/>
+  </svg>`;
+  return L.divIcon({
+    html: `<img src="data:image/svg+xml,${encodeURIComponent(svg)}" style="display:block">`,
+    iconSize: [size+4, size+4],
+    iconAnchor: [(size+4)/2, (size+4)/2],
+    popupAnchor: [0, -(size/2+4)],
+    className: ""
+  });
+}
+
+// ─── Popup ────────────────────────────────────────────────────────────────────
+function confClass(c) { return c >= 90 ? "good" : c >= 70 ? "warn" : ""; }
+
+function buildPopup(p) {
+  // Parse well name from stem
+  const nameParts = (p.pdf_stem || "").split("_");
+  const wellName  = nameParts.length >= 2 ? nameParts.slice(1, -1).join(" ") : p.pdf_stem;
+  const wellId    = nameParts[0] || "";
+  const apino     = nameParts[nameParts.length - 1] || "";
+
+  const str = [
+    p.section ? `Sec ${p.section}` : "",
+    p.township ? `T${p.township}N` : "",
+    p.range    ? `R${p.range}`     : ""
+  ].filter(Boolean).join(", ");
+
+  const colNum = p.collection || "?";
+  const pdfUrl = (p.pdf_path || "").replace("s3://", `https://s3.amazonaws.com/`);
+  const pdfS3  = p.pdf_path || "";
+
+  return `
+<div class="popup-header">
+  <div class="well-name">${wellName || p.pdf_stem}</div>
+  <div class="well-id">API No: ${apino} &nbsp;·&nbsp; ID: ${wellId}</div>
+</div>
+<div class="popup-body">
+  <div class="popup-row"><span class="lbl">Collection</span><span class="val">${colNum} (${p.decade || "—"})</span></div>
+  <div class="popup-row"><span class="lbl">Year / Month</span><span class="val">${p.year || "—"} ${p.month ? "· " + p.month.replace(/^\d+ - /, "") : ""}</span></div>
+  <div class="popup-row"><span class="lbl">County</span><span class="val">${p.county || "—"}</span></div>
+  <div class="popup-row"><span class="lbl">PLSS Location</span><span class="val">${str || "—"}</span></div>
+  <div class="popup-row"><span class="lbl">Quadrant</span><span class="val">${p.quadrant || "—"}</span></div>
+  <div class="popup-row"><span class="lbl">Coordinates</span><span class="val">${(+p.lat).toFixed(5)}°N, ${(+p.lon).toFixed(5)}°W</span></div>
+  <div class="popup-row"><span class="lbl">Resolution</span><span class="val">${p.resolution || "—"}</span></div>
+  <div class="popup-row"><span class="lbl">Confidence</span><span class="val ${confClass(p.confidence)}">${p.confidence}%</span></div>
+  ${p.flags ? `<div class="popup-row"><span class="lbl">Flags</span><span class="val warn">${p.flags}</span></div>` : ""}
+</div>
+<div class="popup-footer">
+  <a class="pdf-link" href="${pdfUrl}" target="_blank" rel="noopener">📄 View Well Record PDF</a>
+  <div class="s3-path">${pdfS3}</div>
+</div>`;
+}
+
+// ─── Render markers ───────────────────────────────────────────────────────────
+function renderMarkers(features) {
+  if (markerLayer) map.removeLayer(markerLayer);
+
+  markerLayer = L.markerClusterGroup({
+    maxClusterRadius: 40,
+    disableClusteringAtZoom: 14,
+    spiderfyOnMaxZoom: true,
+    showCoverageOnHover: false,
+    iconCreateFunction(cluster) {
+      const count = cluster.getChildCount();
+      const size  = count > 1000 ? 48 : count > 100 ? 38 : 28;
+      return L.divIcon({
+        html: `<div style="width:${size}px;height:${size}px;border-radius:50%;
+          background:rgba(27,79,138,.85);border:2px solid #60a5fa;
+          display:flex;align-items:center;justify-content:center;
+          color:#fff;font-weight:700;font-size:${size > 38 ? 13 : 11}px">${count}</div>`,
+        iconSize: [size, size], iconAnchor: [size/2, size/2], className: ""
+      });
+    }
+  });
+
+  features.forEach(f => {
+    const p   = f.properties;
+    const lat = f.geometry.coordinates[1];
+    const lon = f.geometry.coordinates[0];
+    const marker = L.marker([lat, lon], { icon: makeIcon(p.decade, p.confidence) });
+    marker.bindPopup(buildPopup(p), { maxWidth: 340, className: "well-popup" });
+    markerLayer.addLayer(marker);
+  });
+
+  map.addLayer(markerLayer);
+}
+
+// ─── Sidebar stats ────────────────────────────────────────────────────────────
+function updateStats(features) {
+  const years    = features.map(f => +f.properties.year).filter(Boolean);
+  const counties = new Set(features.map(f => f.properties.county).filter(Boolean));
+
+  document.getElementById("stat-total").textContent   = features.length.toLocaleString();
+  document.getElementById("stat-counties").textContent = counties.size;
+  document.getElementById("stat-year-min").textContent = years.length ? Math.min(...years) : "—";
+  document.getElementById("stat-year-max").textContent = years.length ? Math.max(...years) : "—";
+  document.getElementById("well-count-badge").textContent = `${features.length.toLocaleString()} Wells`;
+}
+
+function buildLegend() {
+  const el = document.getElementById("legend");
+  el.innerHTML = "";
+  Object.entries(DECADE_COLORS).forEach(([decade, color]) => {
+    const row = document.createElement("div");
+    row.className = "legend-row";
+    row.dataset.decade = decade;
+    row.innerHTML = `<div class="legend-dot" style="background:${color}"></div><span>${decade}</span>`;
+    row.addEventListener("click", () => toggleDecade(decade, row));
+    el.appendChild(row);
+  });
+}
+
+function toggleDecade(decade, row) {
+  if (hiddenDecades.has(decade)) {
+    hiddenDecades.delete(decade);
+    row.classList.remove("hidden-decade");
+  } else {
+    hiddenDecades.add(decade);
+    row.classList.add("hidden-decade");
+  }
+  applyFilters();
+}
+
+function buildCountyList(features) {
+  const countyCounts = {};
+  features.forEach(f => {
+    const c = f.properties.county;
+    if (c) countyCounts[c] = (countyCounts[c] || 0) + 1;
+  });
+  const sorted = Object.entries(countyCounts).sort((a,b) => b[1]-a[1]).slice(0, 15);
+  const max    = sorted[0]?.[1] || 1;
+  const el     = document.getElementById("county-list");
+  el.innerHTML = sorted.map(([name, cnt]) => `
+    <div class="county-item">
+      <div>
+        <div>${name}</div>
+        <div class="county-bar" style="width:${Math.round(cnt/max*100)}%"></div>
+      </div>
+      <span style="color:#60a5fa;font-weight:700">${cnt}</span>
+    </div>`).join("");
+}
+
+function populateDropdowns(features) {
+  const collections = [...new Set(features.map(f => f.properties.collection))].sort((a,b)=>+a-+b);
+  const decades     = [...new Set(features.map(f => f.properties.decade))].filter(Boolean).sort();
+
+  const colSel = document.getElementById("filter-collection");
+  collections.forEach(c => {
+    const o = document.createElement("option"); o.value = c; o.textContent = `Collection ${c}`; colSel.appendChild(o);
+  });
+  const decSel = document.getElementById("filter-decade");
+  decades.forEach(d => {
+    const o = document.createElement("option"); o.value = d; o.textContent = d; decSel.appendChild(o);
+  });
+}
+
+// ─── Filtering ────────────────────────────────────────────────────────────────
+function applyFilters() {
+  const county   = document.getElementById("search-county").value.toLowerCase().trim();
+  const col      = document.getElementById("filter-collection").value;
+  const decade   = document.getElementById("filter-decade").value;
+  const wellName = document.getElementById("search-wellname").value.toLowerCase().trim();
+
+  const filtered = allFeatures.filter(f => {
+    const p = f.properties;
+    if (hiddenDecades.has(p.decade)) return false;
+    if (county   && !(p.county   || "").toLowerCase().includes(county))   return false;
+    if (col      && p.collection !== col)                                   return false;
+    if (decade   && p.decade !== decade)                                    return false;
+    if (wellName && !(p.well_name || p.pdf_stem || "").toLowerCase().includes(wellName)) return false;
+    return true;
+  });
+
+  renderMarkers(filtered);
+  updateStats(filtered);
+  buildCountyList(filtered);
+}
+
+function resetFilters() {
+  document.getElementById("search-county").value   = "";
+  document.getElementById("filter-collection").value = "";
+  document.getElementById("filter-decade").value   = "";
+  document.getElementById("search-wellname").value  = "";
+  hiddenDecades.clear();
+  document.querySelectorAll(".legend-row").forEach(r => r.classList.remove("hidden-decade"));
+  applyFilters();
+}
+
+// ─── Data loading ─────────────────────────────────────────────────────────────
+async function loadData() {
+  const detail = document.getElementById("load-detail");
+  try {
+    detail.textContent = `Fetching ${DATA_URL}`;
+    const resp = await fetch(DATA_URL);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    detail.textContent = "Parsing well location data...";
+    const geojson = await resp.json();
+
+    allFeatures = geojson.features || [];
+    detail.textContent = `Rendering ${allFeatures.length.toLocaleString()} markers...`;
+
+    // Update timestamp
+    if (geojson.generated) {
+      document.getElementById("data-updated").textContent =
+        new Date(geojson.generated).toLocaleString();
+    }
+
+    // Build UI
+    populateDropdowns(allFeatures);
+    buildLegend();
+    buildCountyList(allFeatures);
+    updateStats(allFeatures);
+    renderMarkers(allFeatures);
+
+    // Fit Oklahoma bounds
+    if (allFeatures.length > 0) {
+      const lats = allFeatures.map(f => f.geometry.coordinates[1]);
+      const lons = allFeatures.map(f => f.geometry.coordinates[0]);
+      map.fitBounds([
+        [Math.min(...lats)-0.3, Math.min(...lons)-0.3],
+        [Math.max(...lats)+0.3, Math.max(...lons)+0.3]
+      ]);
+    }
+
+    // Hide loading
+    const loading = document.getElementById("loading");
+    loading.style.opacity = "0";
+    setTimeout(() => loading.style.display = "none", 300);
+
+  } catch (err) {
+    detail.textContent = `Error: ${err.message}`;
+    console.error(err);
+
+    // Show helpful error
+    document.getElementById("load-detail").innerHTML =
+      `Failed to load data.<br>
+       Run <code>python merge_well_locations.py</code> then<br>
+       <code>python deploy_viewer.py</code> to publish the dataset.`;
+  }
+}
+
+// ─── Boot ─────────────────────────────────────────────────────────────────────
+initMap();
+loadData();
+</script>
+</body>
+</html>

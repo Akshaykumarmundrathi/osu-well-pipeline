@@ -20,5 +20,6 @@ pandas>=2.0
 rapidfuzz>=3.10
 matplotlib>=3.7
 scipy>=1.11
+pytesseract>=0.3.10
 
 # torch installed separately in Dockerfile (CPU-only index URL)

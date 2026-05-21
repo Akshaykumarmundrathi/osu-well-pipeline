@@ -1,119 +1,202 @@
 """
-Google Cloud Vision OCR helpers.
+OCR helpers — Tesseract by default (free, local, zero API cost).
+Optional fallback to Google Cloud Vision API via USE_VISION_API=1 env var.
 
-- Singleton client. On gRPC channel failure (503 / UNAVAILABLE) the
-  client is reset so the next call rebuilds a fresh channel.
-- Retry with exponential back-off for transient failures (3, 6, 15s).
-- All image data is passed in-memory via BytesIO — no temp files.
-- Disk-backed response cache (utils.api_cache) keyed by SHA-256 of
-  image bytes — identical images across runs never re-call the Vision API.
+Public interface is identical to the previous Vision-API-only version so
+all callers (county, location, latlong, grid) need zero changes:
+
+  detect_text_with_vision(pil_image, *, manager, page_num) -> annotations
+  get_page_annotations(pdf_path, page_num, ...)            -> (annotations, pil_image)
+  find_keyword_box(annotations, keywords)                  -> [x0,y0,x1,y1] | None
+
+Annotation objects are _FakeAnnotation instances from utils.api_cache —
+same type used by the disk cache, so Vision and Tesseract paths are
+fully interchangeable and cache hits look identical to fresh OCR.
 """
 
 import io
+import logging
+import os
 import time
 
-from google.api_core.exceptions import ServiceUnavailable
-from google.cloud import vision
+import pytesseract
+from pytesseract import Output as TessOutput
 from PIL import Image as PILImage
 
 from ocr.preprocessing import preprocess_image
 from pdf.pdf_manager import PDFDocumentManager
+from utils.api_cache import _FakeAnnotation, _FakePoly, _FakeVertex, get_cache
 
-_client: vision.ImageAnnotatorClient | None = None
-_RETRY_DELAYS = [3, 6, 15]   # 3 retries after first failure
+log = logging.getLogger(__name__)
+
+# Set USE_VISION_API=1 to use Google Cloud Vision instead of Tesseract
+USE_VISION_API = os.environ.get("USE_VISION_API", "0") == "1"
+
+# Tesseract config — PSM 3 = fully auto layout, OEM 1 = LSTM engine
+_TESS_CONFIG = "--psm 3 --oem 1"
+
+# ---------------------------------------------------------------------------
+# Tesseract backend
+# ---------------------------------------------------------------------------
+
+def _tesseract_annotations(image: PILImage.Image) -> list:
+    """
+    Run Tesseract on a PIL image, return list of _FakeAnnotation objects:
+      [0]  = full-page text (description = all words joined)
+      [1:] = word-level tokens with bounding boxes
+
+    Matches the structure of Google Vision text_annotations so all
+    downstream consumers (find_keyword_box, _tokens_left_of, etc.) work
+    unchanged.
+    """
+    try:
+        data = pytesseract.image_to_data(
+            image.convert("RGB"),
+            output_type=TessOutput.DICT,
+            config=_TESS_CONFIG,
+        )
+    except Exception as exc:
+        log.warning("Tesseract OCR failed: %s", exc)
+        return []
+
+    word_anns   = []
+    full_parts  = []
+
+    for i, word in enumerate(data["text"]):
+        if not word or not word.strip():
+            continue
+        conf = int(data["conf"][i])
+        if conf < 0:          # Tesseract marks non-word rows as conf=-1
+            continue
+        x, y  = int(data["left"][i]),  int(data["top"][i])
+        w, h  = int(data["width"][i]), int(data["height"][i])
+        poly  = _FakePoly([
+            _FakeVertex(x,     y    ),   # top-left
+            _FakeVertex(x + w, y    ),   # top-right
+            _FakeVertex(x + w, y + h),   # bottom-right
+            _FakeVertex(x,     y + h),   # bottom-left
+        ])
+        word_anns.append(_FakeAnnotation(word.strip(), poly))
+        full_parts.append(word.strip())
+
+    if not word_anns:
+        return []
+
+    # Index 0 = full-page text block (Vision API convention)
+    full_ann = _FakeAnnotation(" ".join(full_parts), word_anns[0].bounding_poly)
+    return [full_ann] + word_anns
+
+
+# ---------------------------------------------------------------------------
+# Google Cloud Vision backend (opt-in via USE_VISION_API=1)
+# ---------------------------------------------------------------------------
+
+_vision_client = None
+_RETRY_DELAYS  = [3, 6, 15]
 
 
 class _FakeResponse:
-    """Wraps cached annotation objects to look like a real Vision response."""
-    def __init__(self, annotations: list):
-        self.text_annotations = annotations
-        self.error = type("_E", (), {"message": ""})()
+    """Wraps annotation list to look like a real Vision API response."""
+    def __init__(self, annotations):
+        self.text_annotations     = annotations
+        self.error                = type("_E", (), {"message": ""})()
         self.full_text_annotation = None
 
 
-def _get_client() -> vision.ImageAnnotatorClient:
-    """Lazy singleton accessor for the Vision client."""
-    global _client
-    if _client is None:
-        _client = vision.ImageAnnotatorClient()
-    return _client
+def _get_vision_client():
+    global _vision_client
+    if _vision_client is None:
+        from google.cloud import vision
+        _vision_client = vision.ImageAnnotatorClient()
+    return _vision_client
 
 
-def _reset_client():
-    """Drop the cached client; next _get_client() builds a fresh channel."""
-    global _client
-    _client = None
+def _reset_vision_client():
+    global _vision_client
+    _vision_client = None
 
 
-def _pil_to_bytes(image: PILImage.Image) -> bytes:
-    """Encode a PIL image as PNG bytes (RGB)."""
-    buf = io.BytesIO()
-    image.convert("RGB").save(buf, format="PNG")
-    return buf.getvalue()
-
-
-def _call_with_retry(fn):
-    """
-    Invoke `fn()`. On ServiceUnavailable, reset the client and retry with
-    exponential back-off. Any other exception propagates immediately.
-    Raises the last ServiceUnavailable if all retries are exhausted.
-    """
+def _vision_call_with_retry(image_bytes: bytes):
+    from google.api_core.exceptions import ServiceUnavailable
+    from google.cloud import vision
     last_exc = None
     for delay in [0] + _RETRY_DELAYS:
         if delay:
             time.sleep(delay)
         try:
-            return fn()
+            return _get_vision_client().document_text_detection(
+                image=vision.Image(content=image_bytes)
+            )
         except ServiceUnavailable as exc:
             last_exc = exc
-            _reset_client()
+            _reset_vision_client()
     raise last_exc
 
 
-def _ocr_bytes(image_bytes: bytes):
-    """
-    Run document_text_detection on raw image bytes.
+def _vision_annotations(image: PILImage.Image) -> list:
+    """Call Google Vision API and return raw text_annotations list."""
+    buf   = io.BytesIO()
+    image.convert("RGB").save(buf, format="PNG")
+    resp  = _vision_call_with_retry(buf.getvalue())
+    if resp.error.message:
+        log.warning("Vision API error: %s", resp.error.message)
+        return []
+    return resp.text_annotations or []
 
-    Checks the disk cache first (utils.api_cache). On a miss, calls the
-    Vision API, then stores the response annotations in the cache.
-    Returns the response (real or fake).
+
+# ---------------------------------------------------------------------------
+# Unified OCR entry point (with disk cache)
+# ---------------------------------------------------------------------------
+
+def _ocr_image(image: PILImage.Image) -> list:
     """
-    from utils.api_cache import get_cache
+    OCR a PIL image via the configured backend (Tesseract or Vision API).
+    Checks the disk cache first; writes result to cache on a miss.
+    Returns a list of annotation objects (empty list on failure).
+    """
+    buf   = io.BytesIO()
+    image.convert("RGB").save(buf, format="PNG")
+    image_bytes = buf.getvalue()
+
     cache = get_cache()
     if cache is not None:
         cached = cache.get(image_bytes)
         if cached is not None:
-            return _FakeResponse(cached)
+            return cached          # already _FakeAnnotation objects
 
-    response = _call_with_retry(
-        lambda: _get_client().document_text_detection(
-            image=vision.Image(content=image_bytes)
-        )
-    )
-    if cache is not None and not response.error.message:
-        cache.put(image_bytes, response.text_annotations or [])
-    return response
+    if USE_VISION_API:
+        annotations = _vision_annotations(image)
+    else:
+        annotations = _tesseract_annotations(image)
+
+    if cache is not None and annotations:
+        cache.put(image_bytes, annotations)
+
+    return annotations
 
 
-def detect_text_with_vision(pil_image: PILImage.Image, *,
-                            manager: PDFDocumentManager = None,
-                            page_num: int = None):
+# ---------------------------------------------------------------------------
+# Public interface (identical to old vision_api.py)
+# ---------------------------------------------------------------------------
+
+def detect_text_with_vision(
+    pil_image: PILImage.Image,
+    *,
+    manager: PDFDocumentManager = None,
+    page_num: int = None,
+) -> list:
     """
-    Preprocess (grayscale + contrast + binarize) the given PIL image and
-    run document_text_detection. Returns the `text_annotations` list
-    (possibly empty).
-
-    If both `manager` and `page_num` are provided, the result is cached
-    under key (page_num, 'pre') on the manager, letting subsequent stages
-    that need the same preprocessed annotations skip the Vision call.
+    Preprocess and OCR a PIL image.
+    Result is cached on `manager` so subsequent stages skip the OCR call.
+    Returns annotation list (possibly empty).
     """
     cache_key = (page_num, "pre") if (manager and page_num is not None) else None
     if cache_key and cache_key in manager._ocr_cache:
         return manager._ocr_cache[cache_key]
 
     processed   = preprocess_image(pil_image).convert("RGB")
-    image_bytes = _pil_to_bytes(processed)
-    annotations = _ocr_bytes(image_bytes).text_annotations
+    annotations = _ocr_image(processed)
+
     if cache_key:
         manager._ocr_cache[cache_key] = annotations
     return annotations
@@ -128,13 +211,9 @@ def get_page_annotations(
     manager: PDFDocumentManager = None,
 ):
     """
-    Render a PDF page and OCR it. Accepts a file path, raw bytes, or an
-    existing PDFDocumentManager (preferred — avoids re-opening the doc).
-    Returns (text_annotations | None, pil_image | None).
-
-    When a manager is supplied, the (annotations, pil_image) tuple is
-    cached on manager._ocr_cache[page_num] so subsequent stages on the
-    same record skip the Vision API call.
+    Render a PDF page and OCR it.
+    Returns (annotations | None, pil_image | None).
+    Result is cached on the manager to avoid duplicate OCR calls.
     """
     try:
         if manager is None:
@@ -151,23 +230,21 @@ def get_page_annotations(
         if pil_image is None:
             return None, None
 
-        response = _ocr_bytes(_pil_to_bytes(pil_image))
-        if response.error.message:
-            return None, pil_image
-        result = (response.text_annotations or None), pil_image
+        annotations = _ocr_image(pil_image)
+        result      = (annotations or None), pil_image
         manager._ocr_cache[page_num] = result
         return result
 
     except Exception as exc:
         src = pdf_path or ("bytes" if pdf_bytes else "manager")
-        print(f"Vision API error ({src} page {page_num}): {exc}")
+        log.warning("OCR error (%s page %d): %s", src, page_num, exc)
         return None, None
 
 
-def find_keyword_box(text_annotations, keywords: list[str]) -> list | None:
+def find_keyword_box(text_annotations, keywords: list) -> list | None:
     """
     Return [x_min, y_min, x_max, y_max] of the first annotation token
-    whose lowercased description contains any of the given keywords.
+    whose text contains any of the given keywords (case-insensitive).
     Returns None if not found.
     """
     if not text_annotations:

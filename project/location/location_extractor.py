@@ -29,6 +29,7 @@ from location.grouping import (
     find_keywords_lists,
     get_unified_bounding_box,
 )
+from ocr.quadrant_extractor import extract_quadrant
 from ocr.vision_api import detect_text_with_vision
 from pdf.pdf_manager import PDFDocumentManager
 from utils.io_utils import annotate_page
@@ -168,6 +169,9 @@ def process_single_location(
         "section": "", "township": "", "range": "",
         "raw_text": "", "confidence": 0,
         "image_path": None, "annotated_path": None,
+        "quadrant_pdf": "", "quadrant_db": "",
+        "quadrant_row": "", "quadrant_col": "",
+        "quadrant_confidence": 0,
     }
 
     try:
@@ -199,7 +203,14 @@ def process_single_location(
                     y1 = min(ph, int(unified_box[3]))
                     if x1 > x0 and y1 > y0:
                         crop_box = (x0, y0, x1, y1)
-                        raw_text = _annotations_in_box(annotations, x0, y0, x1, y1)
+                        # Extended box: wider + taller to capture quadrant labels
+                        # (they appear in the same legal description block)
+                        ext = 250
+                        ex0 = max(0,  x0 - ext)
+                        ey0 = max(0,  y0 - ext)
+                        ex1 = min(pw, x1 + ext)
+                        ey1 = min(ph, y1 + ext)
+                        raw_text = _annotations_in_box(annotations, ex0, ey0, ex1, ey1)
                         sec, twp, rng = _extract_str(raw_text)
 
             found = sum(bool(v) for v in (sec, twp, rng))
@@ -235,6 +246,19 @@ def process_single_location(
                 annotate_page(pil_image, crop_box,
                               color="blue", label="STR").save(str(ann_path))
 
+            # -- Quadrant label extraction from the same text block ----------
+            quad = extract_quadrant(raw_text)
+            quad_pdf = quad_db = quad_row = quad_col = ""
+            quad_conf = 0
+            if quad and quad["levels"] == 3:
+                quad_pdf  = quad["pdf_label"]
+                quad_db   = quad["db_label"]
+                quad_row  = str(quad["row"])
+                quad_col  = str(quad["col"])
+                quad_conf = int(quad["confidence"] * 100)
+                log.info("Location -- quadrant found: pdf=%s db=%s row=%s col=%s",
+                         quad_pdf, quad_db, quad_row, quad_col)
+
             log.info("Location -- page %d  sec=%s  twp=%s  rng=%s  conf=%d",
                      page_num, sec, twp, rng, conf)
             result.update(
@@ -243,6 +267,9 @@ def process_single_location(
                 raw_text=raw_text, confidence=conf,
                 image_path=str(crop_path) if crop_path else None,
                 annotated_path=str(ann_path) if ann_path else None,
+                quadrant_pdf=quad_pdf, quadrant_db=quad_db,
+                quadrant_row=quad_row, quadrant_col=quad_col,
+                quadrant_confidence=quad_conf,
             )
             return result
 

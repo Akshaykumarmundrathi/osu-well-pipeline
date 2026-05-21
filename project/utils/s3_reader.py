@@ -61,6 +61,13 @@ def get_pdf_bytes_s3(zip_uri: str, internal_path: str) -> bytes:
     return zf.read(internal_path)
 
 
+def get_pdf_bytes_s3_flat(pdf_uri: str) -> bytes:
+    """Fetch a standalone PDF object from S3 (flat layout, no ZIP wrapper)."""
+    bucket, key = parse_s3_uri(pdf_uri)
+    obj = _client().get_object(Bucket=bucket, Key=key)
+    return obj["Body"].read()
+
+
 def list_pdfs_in_s3_zip(zip_uri: str) -> list[dict]:
     """
     Index every PDF inside a ZIP at zip_uri (an s3:// URI). Returns the

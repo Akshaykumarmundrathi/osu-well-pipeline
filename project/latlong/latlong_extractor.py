@@ -22,6 +22,7 @@ import logging
 import re
 from pathlib import Path
 
+from latlong.location_header import parse_location_block
 from ocr.vision_api import detect_text_with_vision
 from pdf.pdf_manager import PDFDocumentManager
 
@@ -237,14 +238,30 @@ def process_single_latlong(
 
     well_name = _extract_well_name(pdf_stem)
     result = {
-        "detected":  False,
-        "page":      None,
-        "lat":       "",
-        "lon":       "",
-        "well_name": well_name,
-        "well_type": _well_type_from_name(well_name),  # fast check from stem
+        "detected":   False,
+        "page":       None,
+        "lat":        "",
+        "lon":        "",
+        "well_name":  well_name,
+        "well_type":  _well_type_from_name(well_name),
         "confidence": 0,
-        "error":     None,
+        "error":      None,
+        # Extraction audit fields
+        "latlong_method":    "",   # labeled_decimal | dms | unlabeled_decimal
+        "latlong_form_type": "",   # form_1002a | locate_well | unknown | ""
+        # Location: block fields (Form 1002A)
+        "header_county":    "",
+        "header_section":   "",
+        "header_township":  "",
+        "header_range":     "",
+        "header_quad_raw":  "",
+        "header_quad_type": "",
+        "header_quad_db":   "",
+        "header_quad_row":  "",
+        "header_quad_col":  "",
+        "header_feet":      "",    # "660 FSL 660 FWL" summary string
+        "header_rel_x":     "",
+        "header_rel_y":     "",
     }
 
     from config import MAX_LATLONG_PAGES
@@ -267,24 +284,88 @@ def process_single_latlong(
 
             # Try in order: labelled decimal -> DMS -> unlabelled decimal.
             lat, lon, conf = _extract_labeled(full_text)
+            method = "labeled_decimal" if lat is not None else ""
             if lat is None:
                 lat, lon, conf = _extract_dms(full_text)
+                if lat is not None:
+                    method = "dms"
             if lat is None:
                 lat, lon, conf = _extract_unlabeled(full_text)
+                if lat is not None:
+                    method = "unlabeled_decimal"
+
+            # Always parse the Location: / Locate Well block for provenance,
+            # even when lat/lon was found above (gives us county, STR, quad).
+            loc_hdr = parse_location_block(full_text)
+
+            # Form 1002A confidence boost: if Location: block is found AND
+            # lat/lon is labeled, this is a high-quality machine-printed form.
+            if lat is not None and loc_hdr["found"] and method == "labeled_decimal":
+                conf = max(conf, 97)
+                form_type = loc_hdr["form_type"]
+            else:
+                form_type = loc_hdr["form_type"] if loc_hdr["found"] else ""
 
             if lat is not None and lon is not None:
                 well_type = _detect_well_type(full_text, well_name)
                 log.info(
-                    "Lat/Lon -- page %d  lat=%.6f  lon=%.6f  conf=%d  type=%s",
-                    page_num, lat, lon, conf, well_type or "unknown",
+                    "Lat/Lon -- page %d  lat=%.6f  lon=%.6f  conf=%d  "
+                    "method=%s  form=%s",
+                    page_num, lat, lon, conf,
+                    method, form_type or "none",
                 )
+
+                # Build feet summary string for audit CSV
+                feet_parts = []
+                if loc_hdr["feet_fsl"] is not None:
+                    feet_parts.append(f"{loc_hdr['feet_fsl']} FSL")
+                if loc_hdr["feet_fnl"] is not None:
+                    feet_parts.append(f"{loc_hdr['feet_fnl']} FNL")
+                if loc_hdr["feet_fwl"] is not None:
+                    feet_parts.append(f"{loc_hdr['feet_fwl']} FWL")
+                if loc_hdr["feet_fel"] is not None:
+                    feet_parts.append(f"{loc_hdr['feet_fel']} FEL")
+                feet_str = " ".join(feet_parts)
+                if feet_str and loc_hdr["feet_ref"]:
+                    feet_str += f" of {loc_hdr['feet_ref']}"
+
                 result.update(
                     detected=True, page=page_num,
                     lat=str(lat), lon=str(lon),
                     well_type=well_type,
                     confidence=conf,
+                    latlong_method=method,
+                    latlong_form_type=form_type,
+                    header_county=   loc_hdr["county"],
+                    header_section=  loc_hdr["section"],
+                    header_township= loc_hdr["township"],
+                    header_range=    loc_hdr["range"],
+                    header_quad_raw= loc_hdr["quadrant_raw"],
+                    header_quad_type=loc_hdr["quadrant_type"],
+                    header_quad_db=  loc_hdr["quadrant_db"],
+                    header_quad_row= str(loc_hdr["quadrant_row"] or ""),
+                    header_quad_col= str(loc_hdr["quadrant_col"] or ""),
+                    header_feet=     feet_str,
+                    header_rel_x=    str(loc_hdr["rel_x_from_feet"] or ""),
+                    header_rel_y=    str(loc_hdr["rel_y_from_feet"] or ""),
                 )
                 return result
+
+            # lat/lon not found on this page — but if Location: block found,
+            # store its STR data for fallback in the location stage.
+            if loc_hdr["found"] and not result["header_section"]:
+                result.update(
+                    latlong_form_type=form_type,
+                    header_county=   loc_hdr["county"],
+                    header_section=  loc_hdr["section"],
+                    header_township= loc_hdr["township"],
+                    header_range=    loc_hdr["range"],
+                    header_quad_raw= loc_hdr["quadrant_raw"],
+                    header_quad_type=loc_hdr["quadrant_type"],
+                    header_quad_db=  loc_hdr["quadrant_db"],
+                    header_quad_row= str(loc_hdr["quadrant_row"] or ""),
+                    header_quad_col= str(loc_hdr["quadrant_col"] or ""),
+                )
 
     except Exception as exc:
         log.error("LatLon extraction error: %s", exc, exc_info=True)

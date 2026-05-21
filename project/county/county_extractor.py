@@ -34,7 +34,7 @@ from config import (
     RETRY_CONFIDENCE_THRESHOLD,
     VERTICAL_PADDING_PIXELS,
 )
-from county.prompts import prompt_pass1, prompt_pass2, setup_gemini
+from county.prompts import prompt_pass1, prompt_pass2, setup_gemini, _rate_limited_generate
 from ocr.vision_api import find_keyword_box, get_page_annotations
 from pdf.pdf_manager import PDFDocumentManager
 from utils.io_utils import annotate_page
@@ -84,8 +84,8 @@ def _get_gemini():
 
 
 def _gemini_call(model, cfg, prompt: str, pil_image) -> str:
-    """Send (prompt, image) to Gemini and return the stripped text reply."""
-    resp = model.generate_content([prompt, pil_image], generation_config=cfg)
+    """Send (prompt, image) to Gemini with rate-limiting and return the stripped text reply."""
+    resp = _rate_limited_generate(model, prompt, pil_image, cfg)
     return resp.text.strip() if resp.text else ""
 
 

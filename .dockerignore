@@ -1,13 +1,43 @@
 **/__pycache__
 **/*.pyc
+**/*.pyo
 .git
 .claude
+.pytest_cache
 ONBOARDING.md
 CONTEXT.md
 context.md
-aws/results
-aws/build
+CLAUDE.md
+AWS_SETUP_GUIDE.md
+DEPLOY.md
+README.md
+explore_plss_db.py
+build.ps1
+docker-compose.yml
+
+# Output directories — never in the image
+project_outputs*/
+aws/results/
+aws/build/
+
+# Test PDFs — not needed in image
+pdfs/
 project/_smoketest.py
-project_outputs*
+
+# Archives
 *.zip
-*.pdf
+
+# Credentials — NEVER baked into image
+credentials/
+.env
+.env.*
+!.env.example
+
+# Specific JSON files that are secrets (NOT aws/config/*.json which are templates)
+smiling-breaker-*.json
+
+# Tests — not needed in runtime image
+tests/
+
+# Well dot detector source files not needed at runtime
+well_dot_detector/

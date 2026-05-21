@@ -19,22 +19,38 @@ if not os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
             os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(_candidates[0])
 
 # -- Models --------------------------------------------------------------------
-MODEL_FLASH_NAME = "gemini-2.5-flash"
-MODEL_PRO_NAME   = "gemini-2.5-pro"
+# Override via env vars for cost control (e.g. GEMINI_PRO_MODEL=gemini-2.5-flash
+# to avoid Pro quota issues on free-tier GCP projects).
+MODEL_FLASH_NAME = os.environ.get("GEMINI_FLASH_MODEL", "gemini-2.5-flash")
+MODEL_PRO_NAME   = os.environ.get("GEMINI_PRO_MODEL",   "gemini-2.5-flash")  # default to flash — Pro has 0 free-tier quota
 
 # -- Source / Output Paths -----------------------------------------------------
-SOURCE_ROOT  = Path(r"D:")
-OUTPUT_ROOT  = Path(r"D:\project_outputs")
+# Override with environment variables for cloud / Docker deployments.
+# Local dev defaults keep existing behaviour on Windows workstations.
+SOURCE_ROOT = Path(os.environ.get("SOURCE_ROOT", r"D:"))
+OUTPUT_ROOT = Path(os.environ.get("OUTPUT_ROOT", r"D:\project_outputs"))
 
-DATASET_INDEX_CSV     = OUTPUT_ROOT / "dataset_index.csv"
-PROCESSING_STATUS_CSV = OUTPUT_ROOT / "processing_status.csv"
+# Filenames only — callers that need a full path do output_root / CONSTANT.
+DATASET_INDEX_CSV     = "dataset_index.csv"
+PROCESSING_STATUS_CSV = "processing_status.csv"
 
-GRIDS_DIR          = OUTPUT_ROOT / "grids"
-LOCATIONS_DIR      = OUTPUT_ROOT / "locations"
-COUNTIES_DIR       = OUTPUT_ROOT / "counties"
-METADATA_DIR       = OUTPUT_ROOT / "metadata"
-LOGS_DIR           = OUTPUT_ROOT / "logs"
-MANUAL_REVIEW_DIR  = OUTPUT_ROOT / "manual_review"
+# Sub-directory names inside any output_root
+GRIDS_SUBDIR         = "grids"
+LOCATIONS_SUBDIR     = "locations"
+COUNTIES_SUBDIR      = "counties"
+DOTS_SUBDIR          = "dots"
+METADATA_SUBDIR      = "metadata"
+LOGS_SUBDIR          = "logs"
+MANUAL_REVIEW_SUBDIR = "manual_review"
+
+# Absolute paths for local (non-cloud) runs — derived from OUTPUT_ROOT
+GRIDS_DIR          = OUTPUT_ROOT / GRIDS_SUBDIR
+LOCATIONS_DIR      = OUTPUT_ROOT / LOCATIONS_SUBDIR
+COUNTIES_DIR       = OUTPUT_ROOT / COUNTIES_SUBDIR
+DOTS_DIR           = OUTPUT_ROOT / DOTS_SUBDIR
+METADATA_DIR       = OUTPUT_ROOT / METADATA_SUBDIR
+LOGS_DIR           = OUTPUT_ROOT / LOGS_SUBDIR
+MANUAL_REVIEW_DIR  = OUTPUT_ROOT / MANUAL_REVIEW_SUBDIR
 FAILED_RECORDS_CSV = MANUAL_REVIEW_DIR / "failed_records.csv"
 
 # -- Stages --------------------------------------------------------------------
@@ -42,7 +58,8 @@ STAGE_LATLONG  = "latlong"   # runs first; if coords found, grid+location skippe
 STAGE_GRID     = "grid"
 STAGE_LOCATION = "location"
 STAGE_COUNTY   = "county"
-ALL_STAGES     = (STAGE_LATLONG, STAGE_GRID, STAGE_LOCATION, STAGE_COUNTY)
+STAGE_DOT      = "dot"       # U-Net dot detection on saved grid image
+ALL_STAGES     = (STAGE_LATLONG, STAGE_GRID, STAGE_LOCATION, STAGE_COUNTY, STAGE_DOT)
 
 # -- Page / Crop ---------------------------------------------------------------
 PAGE_TO_PROCESS         = 0
@@ -120,6 +137,7 @@ RETRY_CONFIDENCE_THRESHOLD = 95   # auto-accept on Pass 1 if >= this
 COUNTY_REVIEW_BELOW        = 86   # county_score < this -> needs_review
 GRID_REVIEW_BELOW          = 80   # grid_confidence < this -> needs_review
 LOCATION_REVIEW_BELOW      = 100  # any missing field (sec/twp/rng) -> needs_review
+DOT_REVIEW_BELOW           = 70   # dot_confidence < this -> needs_review
 
 # -- Per-stage page caps -------------------------------------------------------
 # First-pass page limits (kept small to control API cost). Retry path uses
@@ -154,18 +172,20 @@ MAX_WORKERS = max(1, os.cpu_count() - 1)
 
 
 # -- Collection-tier dispatcher ------------------------------------------------
-# Manual inspection of the ZIP collections shows the form layout shifts
-# every few collections. Each tier names a strategy bundle the pipeline
-# can switch on.
+# -- Collection-tier dispatcher ------------------------------------------------
+# Four natural breakpoints driven by when the OSU form layout changed:
 #
-#   early      (1-6)   sec/twp/rge keywords present + standard grid form
-#   transition (7-8)   mixed older / newer wells; sec/twp/rge usually present
-#   mid        (9-10)  "Location:" line dominates; sec/twp/rge less reliable
-#   late       (11-12) latitude/longitude often printed; "Location:" still common
-#   modern     (13+)   decimal degrees + "Location:" routine
+#   Collections  1– 6  (EARLY)       ~1911–1940s
+#     sec/twp/rge keywords + standard 8×8 grid; no lat/lon on form.
+#   Collections  7– 8  (TRANSITION)  ~1950s
+#     Mixed older/newer wells; sec/twp/rge still present but layout varies.
+#   Collections  9–10  (MID)         ~1960s–70s
+#     "Location:" line dominates; sec/twp/rge keywords less reliable.
+#   Collections 11–13  (LATE/MODERN) ~1980s–2024
+#     Decimal lat/lon printed on form; "Location:" + coordinates routine.
 #
 # Use tier_for(collection_num) at any decision point that needs to vary by
-# decade. Update the boundaries here as more data comes in — never inline.
+# decade. Update the boundaries here as more data arrives — never inline.
 TIER_EARLY      = "early"
 TIER_TRANSITION = "transition"
 TIER_MID        = "mid"
@@ -180,6 +200,14 @@ _TIER_BOUNDARIES = [
     (13,  9999, TIER_MODERN),
 ]
 
+TIER_DESCRIPTIONS = {
+    TIER_EARLY:      "Collections 1–6  (~1911–1940s) — STR keywords, no lat/lon",
+    TIER_TRANSITION: "Collections 7–8  (~1950s)       — mixed form layout",
+    TIER_MID:        "Collections 9–10 (~1960s–70s)   — Location: line dominant",
+    TIER_LATE:       "Collections 11–12 (~1980s–90s)  — lat/lon + Location:",
+    TIER_MODERN:     "Collections 13+  (~2000s–2024)  — decimal degrees routine",
+}
+
 
 def tier_for(collection_num: int | None) -> str:
     """
@@ -192,6 +220,20 @@ def tier_for(collection_num: int | None) -> str:
         if lo <= collection_num <= hi:
             return name
     return TIER_EARLY
+
+
+def decade_for(year: str | int | None) -> str:
+    """
+    Return the decade string for a year (e.g. '1911' → '1910s').
+    Returns '' if year is empty / unparseable.
+    """
+    if not year:
+        return ""
+    try:
+        y = int(str(year)[:4])
+        return f"{(y // 10) * 10}s"
+    except (ValueError, TypeError):
+        return ""
 
 
 # Per-tier flags. Add knobs here as the pipeline grows; consumers should

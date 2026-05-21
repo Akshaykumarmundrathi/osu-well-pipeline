@@ -1,0 +1,38 @@
+## ============================================================
+## Stage: base  (heavy deps — rebuilt ONLY when requirements.txt
+##               or the torch version changes)
+##
+## Build & push once:
+##   docker build -f Dockerfile.base -t osu-pipeline-base .
+##   docker tag osu-pipeline-base:latest \
+##     225989338968.dkr.ecr.us-east-1.amazonaws.com/osu-pipeline-base:latest
+##   docker push 225989338968.dkr.ecr.us-east-1.amazonaws.com/osu-pipeline-base:latest
+##
+## App image (Dockerfile) references this via FROM.
+## ============================================================
+FROM python:3.11-slim
+
+LABEL org.opencontainers.image.title="osu-well-pipeline-base" \
+      org.opencontainers.image.description="Heavy deps layer: apt + pip + torch (rebuilt rarely)"
+
+# OpenCV + PyMuPDF native libs
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libgl1 libglib2.0-0 ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt /tmp/requirements.txt
+
+# All non-torch deps
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+
+# PyTorch CPU-only — separate index so we never pull 2 GB CUDA wheels
+RUN pip install --no-cache-dir \
+        torch==2.4.1 torchvision==0.19.1 \
+        --index-url https://download.pytorch.org/whl/cpu
+
+# Encoding + runtime defaults (inherited by app image)
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUTF8=1 \
+    PYTHONIOENCODING=utf-8 \
+    AWS_DEFAULT_REGION=us-east-1

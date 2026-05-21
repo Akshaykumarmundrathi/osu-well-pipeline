@@ -25,12 +25,25 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+# ---------------------------------------------------------------------------
+# Load .env from project root for local dev.
+# In Docker/Batch, env vars are already set by run_batch_job.py from
+# Secrets Manager — this block is a safe no-op when the file is absent.
+# ---------------------------------------------------------------------------
+_env_file = Path(__file__).parent.parent / ".env"
+if _env_file.exists():
+    for _line in _env_file.read_text(encoding="utf-8").splitlines():
+        _line = _line.strip()
+        if _line and not _line.startswith("#") and "=" in _line:
+            _k, _, _v = _line.partition("=")
+            os.environ.setdefault(_k.strip(), _v.strip())  # setdefault: never overwrite real env
+
 from config import (
     ALL_STAGES, DATASET_INDEX_CSV, FAILED_RECORDS_CSV,
     LATLONG_MIN_COLLECTION_NUM,
     OUTPUT_ROOT, PROCESSING_STATUS_CSV,
     RESOLUTION_MULTIPLIER, SOURCE_ROOT,
-    STAGE_COUNTY, STAGE_GRID, STAGE_LATLONG, STAGE_LOCATION,
+    STAGE_COUNTY, STAGE_DOT, STAGE_GRID, STAGE_LATLONG, STAGE_LOCATION,
 )
 from pdf.pdf_manager import PDFDocumentManager
 from scan_dataset import DatasetRecord, OutputPathBuilder, load_index, scan_flat_folder
@@ -45,17 +58,38 @@ log = get_logger(__name__)
 
 _SUMMARY_FIELDS = [
     "pdf_path", "pdf_stem", "collection", "year", "month",
+    "zip_path", "model_tier", "decade",
     "latlong_found", "lat", "lon", "latlong_confidence", "latlong_page",
+    "latlong_method", "latlong_form_type",
+    "header_county", "header_section", "header_township", "header_range",
+    "header_quad_raw", "header_quad_db", "header_feet",
     "well_name", "well_type",
-    "grid_found", "grid_page", "grid_method", "grid_confidence",
+    "grid_found", "grid_page", "grid_method", "grid_confidence", "grid_image_path",
     "location_found", "section", "township", "range", "location_confidence",
+    "location_quadrant_pdf", "location_quadrant_db",
+    "location_quadrant_row", "location_quadrant_col", "location_quadrant_confidence",
     "county_found", "county_name", "county_score", "county_confidence",
+    "dot_found", "dot_row", "dot_col", "dot_nw", "dot_confidence",
+    "dot_x_norm", "dot_y_norm",
     "final_status",      # 'success' | 'review' | 'failed'
     "needs_review",      # True if any field below review threshold
     "review_reasons",    # semicolon-joined list of weak signals
-    "latlong_status", "grid_status", "location_status", "county_status",
+    "latlong_status", "grid_status", "location_status", "county_status", "dot_status",
     "latlong_error_type", "grid_error_type",
-    "location_error_type", "county_error_type",
+    "location_error_type", "county_error_type", "dot_error_type",
+    # End-to-end coordinate derivation audit
+    "coord_derivation", "coord_latlong_source",
+    "coord_section_source", "coord_township_source", "coord_range_source",
+    "coord_county_used", "coord_dot_source",
+]
+
+_DOT_FIELDS = [
+    "pdf_path", "pdf_stem", "collection", "year", "month",
+    "well_name",
+    "dot_row", "dot_col", "dot_nw", "dot_confidence",
+    "section", "township", "range",
+    "county_name",
+    "grid_image_path",
 ]
 
 _LATLONG_FIELDS = [
@@ -73,6 +107,7 @@ _STAGE_LABEL = {
     STAGE_GRID:     "Grid",
     STAGE_LOCATION: "Location",
     STAGE_COUNTY:   "County",
+    STAGE_DOT:      "Dot",
 }
 _COL = 14   # label column width
 
@@ -160,6 +195,12 @@ def _format_stage_result(stage: str, r: dict, elapsed: float) -> str:
                     f"({r.get('fuzzy_score', r.get('confidence', 0))}% match){sec}")
         return f"not matched{sec}"
 
+    if stage == STAGE_DOT:
+        if r.get("detected"):
+            return (f"row={r.get('row')}  col={r.get('col')}  "
+                    f"nw={r.get('nw','')}   ({r.get('confidence')}%){sec}")
+        return f"not detected{sec}"
+
     return f"done{sec}"
 
 
@@ -237,6 +278,13 @@ def _make_manager(record: DatasetRecord) -> PDFDocumentManager:
         pdf_bytes = get_pdf_bytes(zp, record.internal_path)
         return PDFDocumentManager(pdf_bytes=pdf_bytes,
                                   resolution_multiplier=RESOLUTION_MULTIPLIER)
+    # Flat S3 layout: no ZIP wrapper, direct s3:// PDF URI
+    pp = record.pdf_path or ""
+    if pp.startswith("s3://"):
+        from utils.s3_reader import get_pdf_bytes_s3_flat
+        pdf_bytes = get_pdf_bytes_s3_flat(pp)
+        return PDFDocumentManager(pdf_bytes=pdf_bytes,
+                                  resolution_multiplier=RESOLUTION_MULTIPLIER)
     return PDFDocumentManager(record.pdf_path,
                               resolution_multiplier=RESOLUTION_MULTIPLIER)
 
@@ -297,18 +345,21 @@ def _classify_record(row: dict) -> tuple[str, list[str]]:
                    coords nor full grid+location)
     """
     from config import (
-        COUNTY_REVIEW_BELOW, GRID_REVIEW_BELOW, LOCATION_REVIEW_BELOW,
+        COUNTY_REVIEW_BELOW, DOT_REVIEW_BELOW, GRID_REVIEW_BELOW,
+        LOCATION_REVIEW_BELOW,
     )
 
     ll_found     = bool(row.get("latlong_lat")) and bool(row.get("latlong_lon"))
     grid_done    = row.get("grid_status")     == DONE
     loc_done     = row.get("location_status") == DONE
     county_done  = row.get("county_status")   == DONE
+    dot_done     = row.get("dot_status")      == DONE
 
     county_score = _int_or_zero(row.get("county_score"))
     grid_conf    = _int_or_zero(row.get("grid_confidence"))
     loc_conf     = _int_or_zero(row.get("location_confidence"))
     ll_conf      = _int_or_zero(row.get("latlong_confidence"))
+    dot_conf     = _int_or_zero(row.get("dot_confidence"))
 
     # Success requires county AND (coords OR (grid AND location)).
     has_geo = ll_found or (grid_done and loc_done)
@@ -324,6 +375,8 @@ def _classify_record(row: dict) -> tuple[str, list[str]]:
         reasons.append(f"location_conf={loc_conf}<{LOCATION_REVIEW_BELOW}")
     if ll_found and ll_conf and ll_conf < 80:
         reasons.append(f"latlong_conf={ll_conf}<80")
+    if dot_done and dot_conf < DOT_REVIEW_BELOW:
+        reasons.append(f"dot_conf={dot_conf}<{DOT_REVIEW_BELOW}")
 
     return ("review" if reasons else "success"), reasons
 
@@ -339,26 +392,51 @@ def _row_to_summary_dict(row: dict, final_status: str,
         "collection":          row.get("collection", ""),
         "year":                row.get("year", ""),
         "month":               row.get("month", ""),
+        "zip_path":            row.get("zip_path", ""),
+        "model_tier":          row.get("model_tier", ""),
+        "decade":              row.get("decade", ""),
         "latlong_found":       ll,
         "lat":                 row.get("latlong_lat", ""),
         "lon":                 row.get("latlong_lon", ""),
         "latlong_confidence":  row.get("latlong_confidence", ""),
         "latlong_page":        row.get("latlong_page", ""),
+        "latlong_method":      row.get("latlong_method", ""),
+        "latlong_form_type":   row.get("latlong_form_type", ""),
+        "header_county":       row.get("header_county", ""),
+        "header_section":      row.get("header_section", ""),
+        "header_township":     row.get("header_township", ""),
+        "header_range":        row.get("header_range", ""),
+        "header_quad_raw":     row.get("header_quad_raw", ""),
+        "header_quad_db":      row.get("header_quad_db", ""),
+        "header_feet":         row.get("header_feet", ""),
         "well_name":           _well_name_from_stem(stem),
         "well_type":           row.get("latlong_well_type", ""),
         "grid_found":          row.get("grid_status")     == DONE,
         "grid_page":           row.get("grid_page", ""),
         "grid_method":         row.get("grid_method", ""),
         "grid_confidence":     row.get("grid_confidence", ""),
-        "location_found":      row.get("location_status") == DONE,
-        "section":             row.get("location_section", ""),
-        "township":            row.get("location_township", ""),
-        "range":               row.get("location_range", ""),
-        "location_confidence": row.get("location_confidence", ""),
+        "location_found":               row.get("location_status") == DONE,
+        "section":                      row.get("location_section", ""),
+        "township":                     row.get("location_township", ""),
+        "range":                        row.get("location_range", ""),
+        "location_confidence":          row.get("location_confidence", ""),
+        "location_quadrant_pdf":        row.get("location_quadrant_pdf", ""),
+        "location_quadrant_db":         row.get("location_quadrant_db", ""),
+        "location_quadrant_row":        row.get("location_quadrant_row", ""),
+        "location_quadrant_col":        row.get("location_quadrant_col", ""),
+        "location_quadrant_confidence": row.get("location_quadrant_confidence", ""),
         "county_found":        row.get("county_status")   == DONE,
         "county_name":         row.get("county_name", ""),
         "county_score":        row.get("county_score", ""),
         "county_confidence":   row.get("county_confidence", ""),
+        "grid_image_path":     row.get("grid_image_path", ""),
+        "dot_found":           row.get("dot_status") == DONE,
+        "dot_row":             row.get("dot_row", ""),
+        "dot_col":             row.get("dot_col", ""),
+        "dot_nw":              row.get("dot_nw", ""),
+        "dot_confidence":      row.get("dot_confidence", ""),
+        "dot_x_norm":          row.get("dot_x_norm", ""),
+        "dot_y_norm":          row.get("dot_y_norm", ""),
         "final_status":        final_status,
         "needs_review":        final_status == "review",
         "review_reasons":      "; ".join(reasons),
@@ -366,10 +444,20 @@ def _row_to_summary_dict(row: dict, final_status: str,
         "grid_status":         row.get("grid_status", ""),
         "location_status":     row.get("location_status", ""),
         "county_status":       row.get("county_status", ""),
+        "dot_status":          row.get("dot_status", ""),
         "latlong_error_type":  row.get("latlong_error_type", ""),
         "grid_error_type":     row.get("grid_error_type", ""),
         "location_error_type": row.get("location_error_type", ""),
-        "county_error_type":   row.get("county_error_type", ""),
+        "county_error_type":     row.get("county_error_type", ""),
+        "dot_error_type":        row.get("dot_error_type", ""),
+        # Coordinate derivation audit
+        "coord_derivation":      row.get("coord_derivation", ""),
+        "coord_latlong_source":  row.get("coord_latlong_source", ""),
+        "coord_section_source":  row.get("coord_section_source", ""),
+        "coord_township_source": row.get("coord_township_source", ""),
+        "coord_range_source":    row.get("coord_range_source", ""),
+        "coord_county_used":     row.get("coord_county_used", ""),
+        "coord_dot_source":      row.get("coord_dot_source", ""),
     }
 
 
@@ -411,6 +499,38 @@ def write_summary_csvs(status: ProcessingStatus, output_root: Path):
 
     _p(f"  success.csv  ({n_success:,} clean + {n_review:,} for review)  -> {success_path}")
     _p(f"  failed.csv   ({n_failed:,} records)                            -> {failed_path}")
+
+
+def write_dot_locations_csv(status: ProcessingStatus, output_path: Path):
+    """Write a CSV with every record where the dot stage succeeded."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    count = 0
+    with output_path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=_DOT_FIELDS, extrasaction="ignore")
+        writer.writeheader()
+        for row in status._rows.values():
+            if row.get("dot_status") != DONE:
+                continue
+            stem = row.get("pdf_stem", "")
+            writer.writerow({
+                "pdf_path":       row.get("pdf_path", ""),
+                "pdf_stem":       stem,
+                "collection":     row.get("collection", ""),
+                "year":           row.get("year", ""),
+                "month":          row.get("month", ""),
+                "well_name":      _well_name_from_stem(stem),
+                "dot_row":        row.get("dot_row", ""),
+                "dot_col":        row.get("dot_col", ""),
+                "dot_nw":         row.get("dot_nw", ""),
+                "dot_confidence": row.get("dot_confidence", ""),
+                "section":        row.get("location_section", ""),
+                "township":       row.get("location_township", ""),
+                "range":          row.get("location_range", ""),
+                "county_name":    row.get("county_name", ""),
+                "grid_image_path": row.get("grid_image_path", ""),
+            })
+            count += 1
+    _p(f"  Dot CSV written  ({count:,} records with dot detection)  ->  {output_path}")
 
 
 def write_latlong_csv(status: ProcessingStatus, output_path: Path):
@@ -513,15 +633,21 @@ def _process_record_worker(arg):
         STAGE_GRID:     paths.grids_dir(record),
         STAGE_LOCATION: paths.locations_dir(record),
         STAGE_COUNTY:   paths.counties_dir(record),
+        STAGE_DOT:      paths.dots_dir(record),
     }
 
     for stage in stages:
         label = _STAGE_LABEL.get(stage, stage)
 
-        # Resume: already done in a prior run.
-        if resume and prior_row.get(f"{stage}_status") == DONE:
+        # Resume: already done or skipped in a prior run.
+        prior_status = prior_row.get(f"{stage}_status")
+        if resume and prior_status == DONE:
             lines.append(f"  {label:<{_COL}}already done")
             results[stage] = {"detected": True, "_was_done": True}
+            continue
+        if resume and prior_status == SKIPPED:
+            lines.append(f"  {label:<{_COL}}already skipped")
+            results[stage] = SKIPPED
             continue
 
         # Latlong collection gate (tier-aware).
@@ -539,8 +665,9 @@ def _process_record_worker(arg):
 
         # Skip grid + location when lat/lon was already found (this run or prior).
         if stage in (STAGE_GRID, STAGE_LOCATION):
+            ll_r = results.get(STAGE_LATLONG, {})
             ll_found = (
-                results.get(STAGE_LATLONG, {}).get("detected", False)
+                (isinstance(ll_r, dict) and ll_r.get("detected", False))
                 or (bool(prior_row.get("latlong_lat"))
                     and bool(prior_row.get("latlong_lon")))
             )
@@ -549,10 +676,26 @@ def _process_record_worker(arg):
                 results[stage] = SKIPPED
                 continue
 
+        # Skip dot detection when grid was not found (no image to run on).
+        if stage == STAGE_DOT:
+            grid_r = results.get(STAGE_GRID)
+            grid_detected = (
+                (isinstance(grid_r, dict) and grid_r.get("detected"))
+                or (grid_r is None and prior_row.get("grid_status") == DONE)
+            )
+            if not grid_detected:
+                lines.append(f"  {label:<{_COL}}skipped  (grid not detected)")
+                results[stage] = SKIPPED
+                continue
+
         t0 = time.monotonic()
+        extra_kw: dict = {}
+        if stage == STAGE_DOT:
+            extra_kw["grid_dir"] = paths.grids_dir(record)
+            extra_kw["output_root"] = paths.root
         try:
             r = _dispatch(stage, manager, stage_dirs[stage],
-                          record.pdf_stem, pdf_log, record=record)
+                          record.pdf_stem, pdf_log, record=record, **extra_kw)
         except Exception as exc:
             pdf_log.error("[%s] unhandled exception: %s", stage.upper(), exc,
                           exc_info=True)
@@ -632,7 +775,10 @@ def run_one_record(
 
 def _dispatch(stage: str, manager: PDFDocumentManager,
               out_dir: Path, pdf_stem: str, log,
-              record: DatasetRecord | None = None) -> dict:
+              record: DatasetRecord | None = None,
+              grid_dir: Path | None = None,
+              output_root: Path | None = None,
+              **kwargs) -> dict:
     """
     Route a stage name to its extractor entry point. Lazy-imports each
     sub-module so a stage that's never invoked never pays the import cost.
@@ -669,6 +815,18 @@ def _dispatch(stage: str, manager: PDFDocumentManager,
     if stage == STAGE_COUNTY:
         from county.county_extractor import process_single_county
         return process_single_county(manager, out_dir, pdf_stem, log)
+
+    if stage == STAGE_DOT:
+        from dot.dot_extractor import process_single_dot
+        from config import tier_for
+        if grid_dir is None:
+            raise ValueError("STAGE_DOT requires grid_dir kwarg")
+        _tier = tier_for(getattr(record, "collection_num", None))
+        return process_single_dot(
+            grid_dir, out_dir, pdf_stem, log,
+            tier=_tier,
+            output_root=output_root,
+        )
 
     raise ValueError(f"Unknown stage: {stage}")
 
@@ -744,6 +902,7 @@ def _retry_one_stage(stage: str, error_type: str, manager, out_dir: Path,
             except AttributeError:
                 pass
 
+    # STAGE_DOT: fully deterministic (no API calls) — nothing to retry.
     return None
 
 
@@ -769,6 +928,7 @@ def _retry_record(record: DatasetRecord, stages: tuple,
         STAGE_GRID:     paths.grids_dir(record),
         STAGE_LOCATION: paths.locations_dir(record),
         STAGE_COUNTY:   paths.counties_dir(record),
+        STAGE_DOT:      paths.dots_dir(record),
     }
 
     parts: list[str] = []
@@ -847,6 +1007,41 @@ def run_pipeline(args):
 
     atexit.register(status.force_save)
 
+    # Disk-backed Vision API cache (survives restarts and spot interruptions).
+    from utils.api_cache import init_cache
+    _api_cache = init_cache(output_root)
+    _cache_stats_before = _api_cache.stats()
+
+    # County → PLSS bounds cache: built once, reused across runs.
+    # Improves direction-inference for partial PLSS records.
+    _county_constraints_dir = output_root
+    from coord.county_constraints import load as _load_cc, build_and_save as _build_cc
+    if not (_county_constraints_dir / "county_constraints.json").exists():
+        _p("  Building county constraints from RDS (one-time)...")
+        try:
+            import os
+            _build_cc(
+                _county_constraints_dir,
+                host=os.environ.get("RDS_HOST", ""),
+                port=int(os.environ.get("RDS_PORT", "5432")),
+                dbname=os.environ.get("RDS_DBNAME",   ""),
+                user=os.environ.get("RDS_USER",       ""),
+                password=os.environ.get("RDS_PASSWORD", ""),
+            )
+            _p(f"  county_constraints.json saved -> {_county_constraints_dir}")
+        except Exception as _cc_exc:
+            _p(f"  county constraints build skipped: {_cc_exc}")
+
+    # Graceful Docker shutdown: flush status before process is killed.
+    import signal
+    def _sigterm_handler(signum, frame):
+        _p("\n  SIGTERM received — flushing status and exiting...")
+        status.force_save()
+        sys.exit(0)
+    signal.signal(signal.SIGTERM, _sigterm_handler)
+
+    _run_start = time.monotonic()
+
     # -- Source records --------------------------------------------------------
     if args.pdf:
         pdf = Path(args.pdf)
@@ -877,13 +1072,25 @@ def run_pipeline(args):
         f"  Records : {len(records):,}\n"
         f"  Stages  : {stage_names}\n"
         f"  Resume  : {'ON  (completed stages are skipped)' if args.resume else 'OFF (all stages reprocessed)'}\n"
-        f"  Output  : {output_root}"
+        f"  Output  : {output_root}\n"
+        f"  API cache: {_cache_stats_before['entries']:,} entries "
+        f"({_cache_stats_before['size_mb']} MB)"
     )
 
-    # Init status
+    # Init status — full traceability fields per record.
+    from config import decade_for, tier_for
     for r in records:
-        status.init_record(r.pdf_stem, r.pdf_path,
-                           r.collection, r.year, r.month)
+        tier   = tier_for(r.collection_num)
+        decade = decade_for(r.year)
+        status.init_record(
+            r.pdf_stem, r.pdf_path,
+            r.collection, r.year, r.month,
+            zip_path=r.zip_path,
+            internal_path=r.internal_path,
+            collection_num=r.collection_num,
+            model_tier=tier,
+            decade=decade,
+        )
     status.force_save()
 
     # -- Group by (collection, year, month) ------------------------------------
@@ -922,7 +1129,7 @@ def run_pipeline(args):
         record_by_stem: dict = {}
         for record in month_recs:
             record_num += 1
-            if args.resume and all(status.is_done(record.pdf_stem, s) for s in stages):
+            if args.resume and all(status.is_done_or_skipped(record.pdf_stem, s) for s in stages):
                 month_skipped += 1
                 total_skipped += 1
                 continue
@@ -1009,6 +1216,7 @@ def run_pipeline(args):
     _p()
     write_summary_csvs(status, output_root)
     write_latlong_csv(status, output_root / "latlong_records.csv")
+    write_dot_locations_csv(status, output_root / "dot_locations.csv")
 
     try:
         md_path, json_path = insights.write()
@@ -1016,6 +1224,59 @@ def run_pipeline(args):
         _p(f"  run_insights.json -> {json_path}")
     except Exception as exc:
         _p(f"  insights.write failed: {exc}")
+
+    # Failure analysis CSV (stage × error_type × tier breakdown).
+    try:
+        from utils.failure_analysis import append_run_history, generate_failure_analysis
+        fa_path    = output_root / "failure_analysis.csv"
+        fa_summary = generate_failure_analysis(
+            output_root / "processing_status.csv", fa_path
+        )
+        if fa_summary:
+            _p(f"  failure_analysis.csv  ({fa_summary['total_failures']:,} failures)  -> {fa_path}")
+    except Exception as exc:
+        _p(f"  failure_analysis failed: {exc}")
+        fa_summary = {}
+
+    # Append this run to history for evolutionary learning.
+    try:
+        cache_stats_after = _api_cache.stats()
+        run_summary = {
+            "elapsed_s": round(time.monotonic() - _run_start, 1),
+            "counts": {s: dict(counts.get(s, {})) for s in ALL_STAGES},
+            "cache_stats": {
+                "entries":        cache_stats_after["entries"],
+                "size_mb":        cache_stats_after["size_mb"],
+                "hits_this_run":  cache_stats_after["entries"] - _cache_stats_before["entries"],
+            },
+            "failure_breakdown": fa_summary.get("breakdown", []) if fa_summary else [],
+        }
+        append_run_history(output_root, run_summary)
+    except Exception as exc:
+        _p(f"  append_run_history failed: {exc}")
+
+    # Self-learning: emit parameter suggestions if trends are clear.
+    try:
+        from utils.evolutionary import learn_from_run
+        suggestions = learn_from_run(output_root)
+        if suggestions:
+            _p(f"  {len(suggestions)} parameter suggestion(s) -> "
+               f"{output_root / 'parameter_suggestions.json'}")
+    except Exception as exc:
+        _p(f"  learn_from_run failed: {exc}")
+
+    # PLSS coordinate enrichment: resolve dot (row, col) → (lat, lon) via RDS.
+    try:
+        from coord.coord_enricher import enrich_with_coordinates
+        enrich_with_coordinates(
+            output_root / "success.csv",
+            output_root / "dot_coordinates.csv",
+            county_constraints_dir=_county_constraints_dir,
+            status_csv=output_root / PROCESSING_STATUS_CSV,
+            _print=_p,
+        )
+    except Exception as exc:
+        _p(f"  coordinate enrichment skipped: {exc}")
 
 
 def print_status(status_csv: Path):

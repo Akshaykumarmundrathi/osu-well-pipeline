@@ -5,6 +5,8 @@ Google Cloud Vision OCR helpers.
   client is reset so the next call rebuilds a fresh channel.
 - Retry with exponential back-off for transient failures (3, 6, 15s).
 - All image data is passed in-memory via BytesIO — no temp files.
+- Disk-backed response cache (utils.api_cache) keyed by SHA-256 of
+  image bytes — identical images across runs never re-call the Vision API.
 """
 
 import io
@@ -19,6 +21,14 @@ from pdf.pdf_manager import PDFDocumentManager
 
 _client: vision.ImageAnnotatorClient | None = None
 _RETRY_DELAYS = [3, 6, 15]   # 3 retries after first failure
+
+
+class _FakeResponse:
+    """Wraps cached annotation objects to look like a real Vision response."""
+    def __init__(self, annotations: list):
+        self.text_annotations = annotations
+        self.error = type("_E", (), {"message": ""})()
+        self.full_text_annotation = None
 
 
 def _get_client() -> vision.ImageAnnotatorClient:
@@ -61,12 +71,28 @@ def _call_with_retry(fn):
 
 
 def _ocr_bytes(image_bytes: bytes):
-    """Run document_text_detection on raw image bytes; returns the response."""
-    return _call_with_retry(
+    """
+    Run document_text_detection on raw image bytes.
+
+    Checks the disk cache first (utils.api_cache). On a miss, calls the
+    Vision API, then stores the response annotations in the cache.
+    Returns the response (real or fake).
+    """
+    from utils.api_cache import get_cache
+    cache = get_cache()
+    if cache is not None:
+        cached = cache.get(image_bytes)
+        if cached is not None:
+            return _FakeResponse(cached)
+
+    response = _call_with_retry(
         lambda: _get_client().document_text_detection(
             image=vision.Image(content=image_bytes)
         )
     )
+    if cache is not None and not response.error.message:
+        cache.put(image_bytes, response.text_annotations or [])
+    return response
 
 
 def detect_text_with_vision(pil_image: PILImage.Image, *,

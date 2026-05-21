@@ -81,6 +81,7 @@ class OutputPathBuilder:
     def grids_dir(self,     r: DatasetRecord) -> Path: return self._base(r, "grids")
     def locations_dir(self, r: DatasetRecord) -> Path: return self._base(r, "locations")
     def counties_dir(self,  r: DatasetRecord) -> Path: return self._base(r, "counties")
+    def dots_dir(self,      r: DatasetRecord) -> Path: return self._base(r, "dots")
 
     def metadata_path(self, r: DatasetRecord) -> Path:
         """Path to the per-record metadata.json file."""

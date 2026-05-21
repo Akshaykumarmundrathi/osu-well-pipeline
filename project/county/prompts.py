@@ -1,3 +1,7 @@
+import os
+import threading
+import time
+
 import google.generativeai as genai
 
 from config import (
@@ -30,13 +34,41 @@ Respond ONLY with the best candidate using standard capitalization
 If nothing matches, respond ONLY with: Not detected."""
 
 
+# ---------------------------------------------------------------------------
+# Global rate limiter — enforces min gap between Gemini API calls so
+# N parallel workers stay under the free-tier RPM limit (10 RPM = 6s/call).
+# GEMINI_MIN_CALL_GAP_S env var overrides (default 6s for free tier;
+# set to 0 on a paid project).
+# ---------------------------------------------------------------------------
+_CALL_GAP = float(os.environ.get("GEMINI_MIN_CALL_GAP_S", "6.0"))
+_rate_lock  = threading.Lock()
+_last_call  = 0.0
+
+
+def _rate_limited_generate(model, prompt, image, cfg):
+    """Call model.generate_content with a global rate-limiter."""
+    global _last_call
+    with _rate_lock:
+        now  = time.monotonic()
+        wait = _CALL_GAP - (now - _last_call)
+        if wait > 0:
+            time.sleep(wait)
+        _last_call = time.monotonic()
+    return model.generate_content([prompt, image], generation_config=cfg)
+
+
 def setup_gemini():
     """
     Initialise Gemini Flash and Pro models with deterministic generation
-    (temperature=0). Requires `GOOGLE_API_KEY` in the environment.
-    Returns the (flash_model, pro_model, generation_config) triple.
+    (temperature=0). Requires GOOGLE_API_KEY or GOOGLE_APPLICATION_CREDENTIALS.
+    Returns the (flash_model, pro_model, generation_config, generate_fn) tuple.
     """
-    genai.configure()
+    api_key = os.environ.get("GOOGLE_API_KEY")
+    if api_key:
+        genai.configure(api_key=api_key)
+    else:
+        genai.configure()   # falls back to ADC (service account)
+
     flash = genai.GenerativeModel(MODEL_FLASH_NAME)
     pro   = genai.GenerativeModel(MODEL_PRO_NAME)
     gen_config = genai.types.GenerationConfig(candidate_count=1, temperature=0.0)

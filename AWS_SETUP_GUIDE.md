@@ -54,8 +54,8 @@ The CLI needs an Access Key + Secret to log in.
 3. Scroll to **Access keys** → **Create access key**
 4. Choose **Command Line Interface (CLI)** → confirm → **Create**
 5. Copy both values:
-   - **Access key ID** (looks like `AKIA...`)
-   - **Secret access key** (longer random string)
+   - **Access key ID** (looks like `AKIA...`)  #
+   - **Secret access key** (longer random string) #
 6. **Save them in a password manager.** You can't see the secret again.
 
 > **Cost note:** Your account is on the free tier. AWS will charge ~$30-70
@@ -133,7 +133,8 @@ You don't need to understand these deeply. The commands below wire them up.
 aws s3 mb "s3://$Env:BUCKET" --region $Env:AWS_REGION
 ```
 
-Expected output: `make_bucket: osu-well-records-123456789012`
+Expected output: `make_bucket: 
+osu-well-records-225989338968`
 
 Now upload your ZIPs. **Pick whichever matches your file layout:**
 
@@ -143,8 +144,9 @@ aws s3 sync "D:\" "s3://$Env:BUCKET/zips/" `
     --exclude "*" --include "ExportedFolderContents (*).zip"
 
 # OR upload one at a time:
-aws s3 cp "D:\ExportedFolderContents (1).zip" "s3://$Env:BUCKET/zips/"
 aws s3 cp "D:\ExportedFolderContents (2).zip" "s3://$Env:BUCKET/zips/"
+aws s3 cp "D:\ExportedFolderContents (11).zip" "s3://$Env:BUCKET/zips/"
+aws s3 cp "D:\ExportedFolderContents (13).zip" "s3://$Env:BUCKET/zips/"
 # ... continue for the rest
 ```
 
@@ -171,7 +173,7 @@ put them in Secrets Manager so they're never baked into the Docker image.
 $gcpPath = "D:\smiling-breaker-423712-h3-aff7ac746ad4.json"     # adjust if different
 
 # Your Gemini API key — paste here as a string
-$geminiKey = "PASTE-YOUR-GEMINI-API-KEY"
+$geminiKey = "PASTE-YOUR-GEMINI-API-KEY" #gemini-2.5-flash
 
 # Combine them into one JSON blob
 $gcp = Get-Content -Raw $gcpPath | ConvertFrom-Json

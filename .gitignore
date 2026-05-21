@@ -1,0 +1,46 @@
+### Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+### Credentials — NEVER commit these
+credentials/
+*.json
+!aws/config/*.json
+.env
+.env.*
+!.env.example
+
+### Model weights (large binaries — keep out of git)
+*.pth
+*.pt
+*.ckpt
+
+### U-Net detector source (lives at D:\well_dot_detector\ — copied here for Docker build only)
+unet_dot_detector.py
+
+### Outputs / data
+project_outputs*/
+aws/results/
+aws/build/
+*.zip
+*.pdf
+
+### IDE
+.vscode/
+.idea/
+*.iml
+
+### OS
+.DS_Store
+Thumbs.db
+
+### Logs
+*.log
+fastsync_*.log

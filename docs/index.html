@@ -659,12 +659,17 @@ function fitOklahoma() {
 async function loadData() {
   const detail = document.getElementById("load-detail");
   try {
-    detail.textContent = "Connecting to AWS S3...";
-    const resp = await fetch(DATA_URL);
-    if (!resp.ok) throw new Error(`HTTP ${resp.status} — ${resp.statusText}`);
-
-    detail.textContent = "Parsing well location data...";
-    const geojson = await resp.json();
+    let geojson;
+    if (typeof INLINE_GEOJSON !== "undefined" && INLINE_GEOJSON) {
+      detail.textContent = "Loading embedded well data...";
+      geojson = INLINE_GEOJSON;
+    } else {
+      detail.textContent = "Connecting to AWS S3...";
+      const resp = await fetch(DATA_URL);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status} — ${resp.statusText}`);
+      detail.textContent = "Parsing well location data...";
+      geojson = await resp.json();
+    }
     allFeatures = geojson.features || [];
 
     if (geojson.generated)

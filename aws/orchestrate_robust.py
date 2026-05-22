@@ -256,6 +256,7 @@ def _register_fixed_job_def(slice_size: int, workers: int) -> str:
                 "ephemeralStorage": {"sizeInGiB": 50},
                 "environment": [
                     {"name": "PYTHONUNBUFFERED",     "value": "1"},
+                    {"name": "PYTHONPATH",            "value": "/app/project:/app"},
                     {"name": "AWS_DEFAULT_REGION",   "value": REGION},
                     {"name": "SLICE_SIZE",            "value": str(slice_size)},
                     {"name": "MAX_WORKERS",           "value": str(workers)},

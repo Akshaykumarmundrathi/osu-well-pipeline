@@ -1,0 +1,63 @@
+# Build from Python slim base — includes pip + essential tools
+FROM python:3.10-slim as builder
+
+LABEL org.opencontainers.image.title="osu-well-pipeline-v6" \
+      org.opencontainers.image.description="Oklahoma well-record PDF processing pipeline (reduced slice size)"
+
+WORKDIR /app
+
+# System dependencies for image processing, PDF, OCR
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
+    tesseract-ocr \
+    libtesseract-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Python dependencies from requirements
+COPY requirements.txt /app/
+RUN pip install --no-cache-dir \
+    boto3>=1.35 \
+    psycopg2-binary>=2.9 \
+    protobuf==5.29.4 \
+    grpcio==1.67.1 \
+    googleapis-common-protos==1.65.0 \
+    google-cloud-vision==3.7.4 \
+    google-generativeai==0.8.3 \
+    pymupdf>=1.24 \
+    opencv-python-headless>=4.10 \
+    pillow>=10.4 \
+    numpy>=1.26 \
+    pandas>=2.0 \
+    rapidfuzz>=3.10 \
+    matplotlib>=3.7 \
+    scipy>=1.11 \
+    pytesseract>=0.3.10
+
+# PyTorch (CPU-only) — lightweight for inference
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu \
+    torch torchvision torchaudio
+
+# Project source — code layer (rebuilds quickly if code changes)
+COPY project              /app/project
+COPY aws/run_batch_job.py /app/run_batch_job.py
+COPY unet_dot_detector.py /app/unet_dot_detector.py
+COPY unet_best.pth        /app/unet_best.pth
+
+# Runtime environment
+ENV UNET_CHECKPOINT=/app/unet_best.pth \
+    OUTPUT_ROOT=/tmp/output \
+    SLICE_SIZE=500 \
+    MAX_WORKERS=4 \
+    PYTHONUNBUFFERED=1
+
+# Set working directory
+WORKDIR /app
+
+# Secrets injected at runtime (never baked in):
+#   INPUT_BUCKET, OUTPUT_BUCKET, INDEX_KEY
+#   GOOGLE_CREDS_SECRET_ID, RDS_CREDS_SECRET_ID
+
+ENTRYPOINT ["python", "/app/run_batch_job.py"]

@@ -245,7 +245,7 @@ def _has_public_ip(job_def: dict) -> bool:
     env_names = {e["name"] for e in cp.get("environment", [])}
     if not _REQUIRED_ENV_KEYS.issubset(env_names):
         missing = _REQUIRED_ENV_KEYS - env_names
-        log.info("Job def missing env vars: %s → will register new revision", missing)
+        log.info("Job def missing env vars: %s -> will register new revision", missing)
         return False
     return True
 

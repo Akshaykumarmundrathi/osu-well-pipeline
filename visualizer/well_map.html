@@ -627,21 +627,31 @@ function fitOklahoma() {
 }
 
 // ─── Data loading ─────────────────────────────────────────────────────────────
-async function loadData() {
+let lastGeneratedTs = null;  // track last seen dataset timestamp for live refresh
+
+async function loadData(silent = false) {
   const detail = document.getElementById("load-detail");
   try {
-    detail.textContent = "Connecting to AWS S3...";
-    const resp = await fetch(DATA_URL);
+    if (!silent) detail.textContent = "Connecting to AWS S3...";
+    // Cache-bust so browsers always get the freshest JSON
+    const resp = await fetch(DATA_URL + "?t=" + Date.now());
     if (!resp.ok) throw new Error(`HTTP ${resp.status} — ${resp.statusText}`);
 
-    detail.textContent = "Parsing well location data...";
+    if (!silent) detail.textContent = "Parsing well location data...";
     const geojson = await resp.json();
+
+    // Skip re-render if data hasn't changed
+    if (silent && geojson.generated && geojson.generated === lastGeneratedTs) return;
+    lastGeneratedTs = geojson.generated || null;
+
     allFeatures = geojson.features || [];
 
-    if (geojson.generated)
-      document.getElementById("data-updated").textContent = new Date(geojson.generated).toLocaleString();
+    if (geojson.generated) {
+      const ts = new Date(geojson.generated).toLocaleString();
+      document.getElementById("data-updated").textContent = ts;
+    }
 
-    detail.textContent = `Rendering ${allFeatures.length.toLocaleString()} well markers...`;
+    if (!silent) detail.textContent = `Rendering ${allFeatures.length.toLocaleString()} well markers...`;
 
     populateDropdowns(allFeatures);
     buildLegend();
@@ -649,8 +659,8 @@ async function loadData() {
     updateStats(allFeatures);
     renderMarkers(allFeatures);
 
-    // Fit to data bounds
-    if (allFeatures.length > 0) {
+    // On first load, fit to data bounds
+    if (!silent && allFeatures.length > 0) {
       const lats = allFeatures.map(f => f.geometry.coordinates[1]);
       const lons = allFeatures.map(f => f.geometry.coordinates[0]);
       map.fitBounds([
@@ -659,20 +669,50 @@ async function loadData() {
       ], { padding: [20, 20] });
     }
 
-    // Hide loading
-    const loading = document.getElementById("loading");
-    loading.style.opacity = "0";
-    setTimeout(() => loading.style.display = "none", 400);
+    // Show live-update toast if this was a silent refresh that found new data
+    if (silent) {
+      showToast(`Map updated — ${allFeatures.length.toLocaleString()} wells`);
+    }
+
+    // Hide loading overlay
+    if (!silent) {
+      const loading = document.getElementById("loading");
+      loading.style.opacity = "0";
+      setTimeout(() => loading.style.display = "none", 400);
+    }
 
   } catch (err) {
-    console.error(err);
-    document.getElementById("load-detail").innerHTML =
-      `<strong style="color:#f87171">Failed to load well data</strong><br>
-       ${err.message}<br><br>
-       Run locally: <code>python merge_well_locations.py && python deploy_viewer.py</code><br>
-       Or open <code>well_map_standalone.html</code> for offline use.`;
+    if (!silent) {
+      console.error(err);
+      document.getElementById("load-detail").innerHTML =
+        `<strong style="color:#f87171">Failed to load well data</strong><br>
+         ${err.message}<br><br>
+         Run locally: <code>python merge_well_locations.py && python deploy_viewer.py</code><br>
+         Or open <code>well_map_standalone.html</code> for offline use.`;
+    }
   }
 }
+
+// ─── Live-refresh toast notification ──────────────────────────────────────────
+function showToast(msg) {
+  let t = document.getElementById("refresh-toast");
+  if (!t) {
+    t = document.createElement("div");
+    t.id = "refresh-toast";
+    t.style.cssText = `position:fixed;bottom:24px;right:24px;z-index:9999;
+      background:#1e3a5f;color:#e0f0ff;padding:10px 18px;border-radius:10px;
+      font-size:13px;font-family:sans-serif;box-shadow:0 4px 16px rgba(0,0,0,.5);
+      opacity:0;transition:opacity .4s;pointer-events:none;`;
+    document.body.appendChild(t);
+  }
+  t.textContent = "🔄 " + msg;
+  t.style.opacity = "1";
+  setTimeout(() => { t.style.opacity = "0"; }, 4000);
+}
+
+// ─── Auto-poll for new data every 10 minutes ──────────────────────────────────
+const POLL_INTERVAL_MS = 10 * 60 * 1000;  // 10 min
+setInterval(() => loadData(true), POLL_INTERVAL_MS);
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 initMap();

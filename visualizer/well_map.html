@@ -259,11 +259,38 @@
       <div class="section-label">Top Counties</div>
       <div id="county-list"></div>
 
+      <!-- Pipeline Analytics -->
+      <div class="section-label">Pipeline Analytics <span style="color:#3a4a60;font-size:9px;font-weight:400" id="analytics-updated"></span></div>
+      <div id="analytics-panel" style="font-size:10px;color:#3a4a60;line-height:1.7">
+        <div style="text-align:center;padding:6px 0"><em>Loading analytics...</em></div>
+      </div>
+
+      <!-- Download analysis files -->
+      <div class="section-label">Download Output Files</div>
+      <div style="font-size:10px;line-height:2">
+        <a href="https://osu-well-records-225989338968.s3.amazonaws.com/analysis/success.csv"
+           style="color:#4d96ff;display:block" target="_blank">success.csv — mapped wells</a>
+        <a href="https://osu-well-records-225989338968.s3.amazonaws.com/analysis/failure_all.csv"
+           style="color:#ff6b6b;display:block" target="_blank">failure_all.csv — all failures</a>
+        <a href="https://osu-well-records-225989338968.s3.amazonaws.com/analysis/failure_location.csv"
+           style="color:#ffa94d;display:block" target="_blank">failure_location.csv — PLSS not found</a>
+        <a href="https://osu-well-records-225989338968.s3.amazonaws.com/analysis/failure_dot.csv"
+           style="color:#ffa94d;display:block" target="_blank">failure_dot.csv — dot detection</a>
+        <a href="https://osu-well-records-225989338968.s3.amazonaws.com/analysis/failure_county.csv"
+           style="color:#ffa94d;display:block" target="_blank">failure_county.csv — county extraction</a>
+        <a href="https://osu-well-records-225989338968.s3.amazonaws.com/analysis/failure_grid.csv"
+           style="color:#ffa94d;display:block" target="_blank">failure_grid.csv — grid detection</a>
+        <a href="https://osu-well-records-225989338968.s3.amazonaws.com/analysis/failure_bounds.csv"
+           style="color:#ffa94d;display:block" target="_blank">failure_bounds.csv — outside Oklahoma</a>
+        <a href="https://osu-well-records-225989338968.s3.amazonaws.com/analysis/pipeline_summary.json"
+           style="color:#6bcb77;display:block" target="_blank">pipeline_summary.json — full stats</a>
+      </div>
+
       <!-- Data info -->
       <div class="section-label">About This Dataset</div>
       <div style="font-size:10px;color:#3a4a60;line-height:1.6">
         Coordinates resolved via quadrant-direct mapping from PLSS grid dot positions on scanned well permit PDFs.
-        Pipeline: AWS Batch → Google Vision OCR → Gemini Flash AI → PostgreSQL PLSS lookup.
+        Pipeline: AWS Batch + Tesseract OCR + Gemini Flash AI + PostgreSQL PLSS lookup.
         <br><br>
         <strong style="color:#5a7090">Updated:</strong> <span id="data-updated">—</span>
         <br>
@@ -710,6 +737,70 @@ function showToast(msg) {
   setTimeout(() => { t.style.opacity = "0"; }, 4000);
 }
 
+// ─── Pipeline analytics panel ─────────────────────────────────────────────────
+const ANALYTICS_URL = `https://${BUCKET}.s3.amazonaws.com/analysis/pipeline_summary.json`;
+
+async function loadAnalytics() {
+  const panel = document.getElementById("analytics-panel");
+  try {
+    const resp = await fetch(ANALYTICS_URL + "?t=" + Date.now());
+    if (!resp.ok) throw new Error(resp.status);
+    const d = await resp.json();
+
+    const total   = (d.total_pdfs || 0).toLocaleString();
+    const ok      = (d.total_success || 0).toLocaleString();
+    const fail    = (d.total_failure || 0).toLocaleString();
+    const okPct   = d.success_rate_pct || 0;
+    const failPct = d.failure_rate_pct || 0;
+    const slices  = d.slices_analyzed || 0;
+
+    // Build failure bar
+    const domains = d.failure_by_domain || {};
+    const ORDER   = ["location","dot","county","bounds","unknown","grid","latlong"];
+    const COLORS  = {location:"#ff9f43",dot:"#ff6b6b",county:"#ffd93d",
+                     bounds:"#ff6bce",grid:"#48dbfb",latlong:"#6bcb77",unknown:"#aaa"};
+    const LABELS  = {location:"PLSS not found",dot:"Dot not detected",county:"County error",
+                     bounds:"Outside Oklahoma",grid:"Grid not detected",latlong:"Lat/long parse",unknown:"Unknown"};
+
+    let barHtml = `<div style="display:flex;height:10px;border-radius:5px;overflow:hidden;margin:4px 0 6px">`;
+    for (const dom of ORDER) {
+      const pct = (domains[dom]||{}).pct_of_total || 0;
+      if (pct > 0) barHtml += `<div title="${LABELS[dom]}: ${pct}%" style="width:${pct}%;background:${COLORS[dom]}"></div>`;
+    }
+    barHtml += `<div style="flex:1;background:#4d96ff" title="Success: ${okPct}%"></div></div>`;
+
+    let failRows = "";
+    for (const dom of ORDER) {
+      const info = domains[dom] || {};
+      if (!info.count) continue;
+      failRows += `<div style="display:flex;justify-content:space-between;padding:1px 0">
+        <span style="color:${COLORS[dom]}">${LABELS[dom]}</span>
+        <span>${(info.count||0).toLocaleString()} <span style="color:#888">(${info.pct_of_total||0}%)</span></span>
+      </div>`;
+    }
+
+    panel.innerHTML = `
+      <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+        <span style="color:#4d96ff;font-weight:700;font-size:13px">${okPct}% success</span>
+        <span style="color:#ff6b6b;font-weight:700;font-size:13px">${failPct}% failure</span>
+      </div>
+      ${barHtml}
+      <div style="display:flex;justify-content:space-between;color:#888;margin-bottom:6px">
+        <span>${ok} mapped</span><span>${fail} failed</span><span>${total} total</span>
+      </div>
+      <div style="border-top:1px solid #d0d8e8;padding-top:4px;margin-bottom:2px"><strong>Failure breakdown:</strong></div>
+      ${failRows}
+      <div style="margin-top:5px;color:#888">${slices} of 2,705 slices complete</div>`;
+
+    const updated = d.generated_utc ? new Date(d.generated_utc).toLocaleString() : "";
+    const el = document.getElementById("analytics-updated");
+    if (el) el.textContent = updated ? `as of ${updated}` : "";
+
+  } catch (e) {
+    panel.innerHTML = `<div style="color:#aaa;font-style:italic">Analytics unavailable</div>`;
+  }
+}
+
 // ─── Auto-poll for new data every 10 minutes ──────────────────────────────────
 const POLL_INTERVAL_MS = 10 * 60 * 1000;  // 10 min
 setInterval(() => loadData(true), POLL_INTERVAL_MS);
@@ -717,6 +808,8 @@ setInterval(() => loadData(true), POLL_INTERVAL_MS);
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 initMap();
 loadData();
+loadAnalytics();
+setInterval(loadAnalytics, POLL_INTERVAL_MS);
 </script>
 </body>
 </html>

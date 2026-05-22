@@ -22,7 +22,8 @@ from datetime import datetime, timezone
 BUCKET       = "osu-well-records-225989338968"
 RESULTS_PFX  = "results/"
 STATE_FILE   = os.path.join(os.path.dirname(__file__), "refresh_state.json")
-MERGE_SCRIPT = os.path.join(os.path.dirname(__file__), "merge_well_locations.py")
+MERGE_SCRIPT   = os.path.join(os.path.dirname(__file__), "merge_well_locations.py")
+ANALYZE_SCRIPT = os.path.join(os.path.dirname(__file__), "analyze_pipeline_output.py")
 MAP_HTML     = os.path.join(os.path.dirname(__file__), "well_map.html")
 REGION       = "us-east-1"
 
@@ -115,6 +116,14 @@ def main():
     if not ok:
         print("  ERROR: merge_well_locations.py failed — aborting.")
         return
+
+    # Run incremental failure analysis (only new slices)
+    print(f"  Running analyze_pipeline_output.py (incremental)...")
+    subprocess.run(
+        [sys.executable, ANALYZE_SCRIPT],
+        cwd=os.path.dirname(__file__),
+        capture_output=False,
+    )
 
     # Read the well count from the freshly written JSON
     local_json = os.path.join(os.path.dirname(__file__), "well_locations.json")

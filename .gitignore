@@ -11,9 +11,20 @@ build/
 
 ### Credentials — NEVER commit these
 credentials/
+**/credentials/
+*.pem
+*.key
 *.json
 !aws/config/*.json
 !visualizer/package*.json
+!package.json
+!package-lock.json
+# Explicit protection against service account keys
+*service*account*.json
+*gcp*.json
+*google*.json
+*aws*credentials*
+*aws*access*
 
 ### Visualizer — generated files (too large for git, rebuilt on demand)
 visualizer/well_locations.json

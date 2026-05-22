@@ -42,6 +42,7 @@ RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu 
 
 # Project source — code layer (rebuilds quickly if code changes)
 COPY project              /app/project
+COPY project/main.py      /app/main.py
 COPY aws/run_batch_job.py /app/run_batch_job.py
 COPY unet_dot_detector.py /app/unet_dot_detector.py
 COPY unet_best.pth        /app/unet_best.pth

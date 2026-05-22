@@ -43,6 +43,7 @@ import json
 import logging
 import os
 import random
+import shutil
 import signal
 import subprocess
 import sys
@@ -89,6 +90,14 @@ CHECKPOINT_INTERVAL_S = int(os.environ.get("CHECKPOINT_INTERVAL_S", "300"))
 
 OUTPUT_ROOT  = Path(os.environ.get("OUTPUT_ROOT", "/tmp/output"))
 SLICE_PREFIX = f"results/slice-{JOB_INDEX:05d}"
+
+# Disk-space thresholds (bytes).
+_DISK_WARN_BYTES  = int(os.environ.get("DISK_WARN_GB",  "8"))  * 1024**3
+_DISK_PRUNE_BYTES = int(os.environ.get("DISK_PRUNE_GB", "4"))  * 1024**3
+_DISK_CHECK_INTERVAL_S = 120   # check every 2 minutes
+
+# Image extensions pruned from /tmp/output to reclaim space.
+_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".tif", ".tiff"}
 
 # ---------------------------------------------------------------------------
 # SIGTERM handler
@@ -172,6 +181,61 @@ def _with_retry(fn, label: str, max_attempts: int = 4, base_delay: float = 2.0):
             log.warning("%s attempt %d/%d failed — retry in %.1fs  (%s)",
                         label, attempt, max_attempts, delay, exc)
             time.sleep(delay)
+
+# ---------------------------------------------------------------------------
+# Disk space management
+# ---------------------------------------------------------------------------
+
+def _free_bytes(path: Path) -> int:
+    """Bytes free on the filesystem containing `path`."""
+    try:
+        return shutil.disk_usage(str(path)).free
+    except Exception:
+        return 2**62   # assume infinite on error
+
+
+def _prune_images(output_root: Path) -> int:
+    """
+    Delete crop/annotated image files from output_root to reclaim disk space.
+    State files (CSV, JSON, .log) are kept — they are small and needed for
+    resume. Returns number of bytes freed.
+    """
+    freed = 0
+    for p in output_root.rglob("*"):
+        if p.is_file() and p.suffix.lower() in _IMAGE_EXTS:
+            try:
+                freed += p.stat().st_size
+                p.unlink()
+            except Exception:
+                pass
+    log.info("Pruned images from %s — freed %.1f MB", output_root, freed / 1024**2)
+    return freed
+
+
+def _start_disk_watchdog(output_root: Path, stop_event: threading.Event):
+    """
+    Background thread that watches free disk space on /tmp.
+    - Warns at < DISK_WARN_GB free.
+    - Prunes images at < DISK_PRUNE_GB free (emergency cleanup).
+    """
+    def _loop():
+        log.info("Disk watchdog started (check every %ds)", _DISK_CHECK_INTERVAL_S)
+        while not stop_event.wait(timeout=_DISK_CHECK_INTERVAL_S):
+            free = _free_bytes(output_root)
+            free_gb = free / 1024**3
+            if free < _DISK_PRUNE_BYTES:
+                log.error(
+                    "DISK CRITICAL: %.1f GB free — pruning images immediately", free_gb
+                )
+                _prune_images(output_root)
+            elif free < _DISK_WARN_BYTES:
+                log.warning("Disk low: %.1f GB free", free_gb)
+        log.info("Disk watchdog stopped")
+
+    t = threading.Thread(target=_loop, name="disk-watchdog", daemon=True)
+    t.start()
+    return t
+
 
 # ---------------------------------------------------------------------------
 # Secrets
@@ -332,9 +396,16 @@ def _run_pipeline(index_csv: Path, output_root: Path) -> int:
 # ---------------------------------------------------------------------------
 # S3 upload
 # ---------------------------------------------------------------------------
-def _upload_results(output_root: Path) -> int:
+def _upload_results(output_root: Path, prune_images_after: bool = False) -> int:
+    """
+    Upload everything under output_root to S3.
+    If prune_images_after=True, delete successfully-uploaded image files
+    to reclaim disk space (state files are always kept).
+    """
     s3 = _s3()
     n = errors = 0
+    uploaded_images: list[Path] = []
+
     for path in sorted(Path(output_root).rglob("*")):
         if not path.is_file():
             continue
@@ -343,12 +414,25 @@ def _upload_results(output_root: Path) -> int:
         try:
             _with_retry(
                 lambda p=path, k=key: s3.upload_file(str(p), OUTPUT_BUCKET, k),
-                label=f"upload:{path.name}", max_attempts=4,
+                label=f"upload:{path.name}", max_attempts=5,
             )
             n += 1
+            if prune_images_after and path.suffix.lower() in _IMAGE_EXTS:
+                uploaded_images.append(path)
         except Exception as e:
             log.error("upload failed: %s  (%s)", path.name, e)
             errors += 1
+
+    if uploaded_images:
+        freed = sum(p.stat().st_size for p in uploaded_images if p.exists())
+        for p in uploaded_images:
+            try:
+                p.unlink()
+            except Exception:
+                pass
+        log.info("Post-upload pruned %d images (%.1f MB freed)",
+                 len(uploaded_images), freed / 1024**2)
+
     log.info("uploaded %d files to s3://%s/%s/  (%d errors)",
              n, OUTPUT_BUCKET, SLICE_PREFIX, errors)
     return n
@@ -387,9 +471,10 @@ def _start_checkpoint_thread(output_root: Path, stop_event: threading.Event):
         while not stop_event.wait(timeout=CHECKPOINT_INTERVAL_S):
             if _terminating:
                 break
-            log.info("Periodic checkpoint upload ...")
+            log.info("Periodic checkpoint upload (prune_images=True) ...")
             try:
-                _upload_results(output_root)
+                # Prune images after upload — keeps /tmp lean between checkpoints.
+                _upload_results(output_root, prune_images_after=True)
             except Exception:
                 log.warning("Periodic checkpoint error:\n%s", traceback.format_exc())
         log.info("Checkpoint thread stopped")
@@ -410,11 +495,16 @@ def main():
 
     OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
 
+    # Log initial disk state.
+    free_gb = _free_bytes(OUTPUT_ROOT) / 1024**3
+    log.info("Disk free at start: %.1f GB", free_gb)
+
     try:
         _load_secrets()
         _download_checkpoint(OUTPUT_ROOT)   # resume: restore prior state files
         index_csv = _fetch_slice()
         _start_checkpoint_thread(OUTPUT_ROOT, stop_checkpoint)
+        _start_disk_watchdog(OUTPUT_ROOT, stop_checkpoint)
         pipeline_exit = _run_pipeline(index_csv, OUTPUT_ROOT)
 
     except SystemExit:

@@ -232,9 +232,22 @@ def _get_active_job_def() -> dict:
     return defs[0] if defs else {}
 
 
+_REQUIRED_ENV_KEYS = {"PYTHONPATH", "INPUT_BUCKET", "OUTPUT_BUCKET", "INDEX_KEY",
+                      "GOOGLE_CREDS_SECRET_ID"}
+
+
 def _has_public_ip(job_def: dict) -> bool:
-    nc = (job_def.get("containerProperties") or {}).get("networkConfiguration") or {}
-    return nc.get("assignPublicIp") == "ENABLED"
+    """Return True only if the job def is fully configured (network + all required env vars)."""
+    cp = job_def.get("containerProperties") or {}
+    nc = cp.get("networkConfiguration") or {}
+    if nc.get("assignPublicIp") != "ENABLED":
+        return False
+    env_names = {e["name"] for e in cp.get("environment", [])}
+    if not _REQUIRED_ENV_KEYS.issubset(env_names):
+        missing = _REQUIRED_ENV_KEYS - env_names
+        log.info("Job def missing env vars: %s → will register new revision", missing)
+        return False
+    return True
 
 
 def _register_fixed_job_def(slice_size: int, workers: int) -> str:

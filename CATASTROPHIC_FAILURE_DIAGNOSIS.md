@@ -23,9 +23,9 @@ Comprehensive system audit revealed **CRITICAL failures** across multiple system
 **Status:** CRITICAL - EXPOSED & REMEDIATED
 
 **Credentials Found in Plaintext:**
-- `GOOGLE_API_KEY=AIzaSyDc2kUTgbpg****REDACTED****`
-- `RDS_PASSWORD=Geology#OSU`
-- `GOOGLE_APPLICATION_CREDENTIALS=D:\project_modular\credentials\smiling-breaker-423712-h3-aff7ac746ad4.json`
+- `GOOGLE_API_KEY=AIzaSyDc2kUTgbpg...****REDACTED****` (revoked)
+- `RDS_PASSWORD=Geology#OSU` (rotated)
+- `GOOGLE_APPLICATION_CREDENTIALS=...credentials.json` (rotated)
 
 **Remediation Completed:**
 1. ✅ Deleted insecure `.env` file  

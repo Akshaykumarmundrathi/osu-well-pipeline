@@ -29,11 +29,11 @@ echo "[2/10] Creating Secrets Manager entries..."
 # Note: These commands assume the secrets don't exist yet
 # If they exist, use update-secret instead
 
-# Gemini API Key (stub - user should add real key)
+# Gemini API Key (user must provide actual key value)
 aws secretsmanager create-secret \
   --name osu-pipeline/gemini-api-key \
   --description "Google Gemini API Key" \
-  --secret-string '{"api_key":"AIzaSyDc2kUTgbpg****REDACTED****"}' \
+  --secret-string "{\"api_key\":\"${GEMINI_KEY}\"}" \
   --region $AWS_REGION 2>/dev/null || echo "   (Secret already exists)"
 echo "✓ Gemini API key secret ready"
 

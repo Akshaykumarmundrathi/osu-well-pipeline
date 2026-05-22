@@ -66,10 +66,11 @@ aws cloudwatch get-metric-statistics \
 
 ```bash
 # Create Gemini API Key secret
+# NOTE: Replace with actual API key value
 aws secretsmanager create-secret \
   --name osu-pipeline/gemini-api-key \
   --description "Google Gemini API Key for OSU pipeline" \
-  --secret-string '{"api_key":"AIzaSyDc2kUTgbpg****REDACTED****"}' \
+  --secret-string '{"api_key":"INSERT_ACTUAL_KEY_HERE"}' \
   --region us-east-1
 
 # Create RDS credentials secret  

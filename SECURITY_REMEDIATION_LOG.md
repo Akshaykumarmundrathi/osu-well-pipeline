@@ -126,7 +126,7 @@ As per user's explicit security directive:
 |-----------|--------|
 | `.env` and `credentials/` directories NEVER committed to git | ✅ Enforced in .gitignore |
 | AWS secrets stored in Secrets Manager only (NOT in repo) | ✅ Config files reviewed, no secrets stored |
-| New Gemini API key `AIzaSyDc2kUTgbpg****REDACTED****` in use | ✅ Verified in environment |
+| Gemini API key secured in AWS Secrets Manager (redacted) | ✅ Verified |
 | No service account keys in repository | ✅ Now enforced by .gitignore patterns |
 
 ---

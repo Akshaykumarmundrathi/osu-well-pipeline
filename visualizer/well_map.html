@@ -16,156 +16,215 @@
 
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
-
   body { font-family: 'Segoe UI', Arial, sans-serif; display: flex; flex-direction: column; height: 100vh; background: #1a1a2e; color: #eee; }
 
   /* ── Header ── */
   #header {
-    background: linear-gradient(135deg, #1B4F8A 0%, #0d2d52 100%);
-    padding: 10px 18px;
-    display: flex; align-items: center; gap: 14px;
-    box-shadow: 0 2px 8px rgba(0,0,0,.4);
-    flex-shrink: 0;
+    background: linear-gradient(135deg, #0d2d52 0%, #1B4F8A 60%, #0d2d52 100%);
+    padding: 10px 18px; display: flex; align-items: center; gap: 14px;
+    box-shadow: 0 2px 10px rgba(0,0,0,.6); flex-shrink: 0; z-index: 10;
   }
-  #header h1 { font-size: 17px; font-weight: 700; letter-spacing: .5px; }
-  #header .subtitle { font-size: 11px; color: #adc8e8; margin-top: 2px; }
+  #header .logo { font-size: 22px; line-height: 1; }
+  #header h1 { font-size: 16px; font-weight: 700; letter-spacing: .4px; color: #fff; }
+  #header .subtitle { font-size: 10px; color: #90bce0; margin-top: 2px; }
   #well-count-badge {
-    margin-left: auto; background: #e8a000; color: #000;
-    font-weight: 700; font-size: 12px; padding: 4px 10px;
-    border-radius: 12px; white-space: nowrap;
+    margin-left: auto; background: linear-gradient(135deg,#e8a000,#f0c040);
+    color: #000; font-weight: 800; font-size: 12px;
+    padding: 5px 12px; border-radius: 14px; white-space: nowrap;
+    box-shadow: 0 2px 6px rgba(232,160,0,.4);
   }
+  .header-btn {
+    background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.2);
+    color: #fff; padding: 5px 10px; border-radius: 6px; font-size: 11px;
+    cursor: pointer; white-space: nowrap; transition: background .15s;
+  }
+  .header-btn:hover { background: rgba(255,255,255,.2); }
 
   /* ── Main layout ── */
   #main { display: flex; flex: 1; overflow: hidden; }
 
   /* ── Sidebar ── */
   #sidebar {
-    width: 300px; background: #16213e; border-right: 1px solid #2a3a5c;
+    width: 280px; background: rgba(15,23,42,.95);
+    border-right: 1px solid rgba(255,255,255,.08);
     display: flex; flex-direction: column; flex-shrink: 0; overflow: hidden;
+    backdrop-filter: blur(10px);
   }
-  #sidebar-inner { overflow-y: auto; flex: 1; padding: 12px; }
+  #sidebar-inner { overflow-y: auto; flex: 1; padding: 10px 12px; }
+
   .section-label {
-    font-size: 10px; font-weight: 700; text-transform: uppercase;
-    letter-spacing: 1px; color: #5a8fc7; margin: 12px 0 6px;
+    font-size: 9px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 1.2px; color: #4a90d9; margin: 14px 0 6px;
+    border-bottom: 1px solid rgba(74,144,217,.2); padding-bottom: 4px;
   }
+  .section-label:first-child { margin-top: 4px; }
+
   input[type=text], select {
-    width: 100%; padding: 7px 10px; border: 1px solid #2a3a5c;
-    border-radius: 6px; background: #0f172a; color: #eee; font-size: 13px;
-    margin-bottom: 8px;
+    width: 100%; padding: 7px 10px; border: 1px solid rgba(255,255,255,.1);
+    border-radius: 6px; background: rgba(255,255,255,.06); color: #eee;
+    font-size: 12px; margin-bottom: 7px; transition: border-color .15s;
   }
-  input[type=text]:focus, select:focus { outline: none; border-color: #3b82f6; }
+  input[type=text]:focus, select:focus { outline: none; border-color: #3b82f6; background: rgba(59,130,246,.1); }
+  select option { background: #1e293b; }
+
   button.filter-btn {
     width: 100%; padding: 8px; border: none; border-radius: 6px;
-    background: #1B4F8A; color: #fff; font-size: 13px; font-weight: 600;
-    cursor: pointer; margin-bottom: 6px;
+    background: linear-gradient(135deg,#1B4F8A,#2563eb); color: #fff;
+    font-size: 12px; font-weight: 600; cursor: pointer; margin-bottom: 6px;
+    transition: opacity .15s;
   }
-  button.filter-btn:hover { background: #2563a0; }
+  button.filter-btn:hover { opacity: .85; }
   button.reset-btn {
-    width: 100%; padding: 7px; border: 1px solid #2a3a5c; border-radius: 6px;
-    background: transparent; color: #aaa; font-size: 12px; cursor: pointer;
+    width: 100%; padding: 7px; border: 1px solid rgba(255,255,255,.12); border-radius: 6px;
+    background: transparent; color: #999; font-size: 11px; cursor: pointer; transition: all .15s;
   }
-  button.reset-btn:hover { background: #1e293b; color: #eee; }
+  button.reset-btn:hover { background: rgba(255,255,255,.06); color: #eee; }
 
   /* Stats panel */
-  .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 8px; }
+  .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin-bottom: 6px; }
   .stat-box {
-    background: #0f172a; border: 1px solid #2a3a5c; border-radius: 6px;
-    padding: 8px 10px; text-align: center;
+    background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.08);
+    border-radius: 7px; padding: 8px 10px; text-align: center;
   }
-  .stat-box .val { font-size: 22px; font-weight: 700; color: #60a5fa; }
-  .stat-box .lbl { font-size: 10px; color: #888; margin-top: 2px; }
+  .stat-box .val { font-size: 20px; font-weight: 800; color: #60a5fa; }
+  .stat-box .lbl { font-size: 9px; color: #666; margin-top: 2px; text-transform: uppercase; letter-spacing: .5px; }
 
   /* Legend */
-  .legend-row { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; font-size: 12px; cursor: pointer; }
-  .legend-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; border: 2px solid rgba(255,255,255,.3); }
-  .legend-row.hidden-decade .legend-dot { opacity: .3; }
-  .legend-row.hidden-decade span { color: #555; text-decoration: line-through; }
+  .legend-row {
+    display: flex; align-items: center; gap: 8px;
+    margin-bottom: 4px; font-size: 11px; cursor: pointer; padding: 3px 5px;
+    border-radius: 4px; transition: background .1s;
+  }
+  .legend-row:hover { background: rgba(255,255,255,.05); }
+  .legend-dot { width: 11px; height: 11px; border-radius: 50%; flex-shrink: 0; border: 2px solid rgba(255,255,255,.35); }
+  .legend-row.hidden-decade .legend-dot { opacity: .25; }
+  .legend-row.hidden-decade span { color: #444; text-decoration: line-through; }
 
   /* County list */
   .county-item {
-    display: flex; justify-content: space-between; font-size: 11px;
-    padding: 3px 0; border-bottom: 1px solid #1e293b;
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 11px; padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,.05);
   }
-  .county-bar { height: 4px; background: #3b82f6; border-radius: 2px; margin-top: 2px; }
+  .county-bar-wrap { flex: 1; margin: 0 8px; height: 4px; background: rgba(255,255,255,.06); border-radius: 2px; }
+  .county-bar { height: 4px; background: linear-gradient(90deg,#1B4F8A,#3b82f6); border-radius: 2px; }
 
-  /* ── Map ── */
+  /* ── Map container ── */
   #map { flex: 1; z-index: 1; }
 
-  /* ── Popup styling ── */
+  /* Layer control override — readable on satellite */
+  .leaflet-control-layers { background: rgba(15,23,42,.9) !important; color: #ddd !important; border: 1px solid rgba(255,255,255,.15) !important; }
+  .leaflet-control-layers label { color: #ddd !important; font-size: 12px; }
+  .leaflet-control-layers-separator { border-color: rgba(255,255,255,.1) !important; }
+
+  /* ── Popup ── */
   .leaflet-popup-content-wrapper {
-    background: #16213e; color: #eee; border: 1px solid #2a3a5c;
-    border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.5);
-    min-width: 270px; max-width: 340px;
+    background: rgba(10,18,35,.95); color: #eee; border: 1px solid rgba(96,165,250,.3);
+    border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,.7); min-width: 280px; max-width: 360px;
+    backdrop-filter: blur(16px);
   }
-  .leaflet-popup-tip { background: #16213e; }
+  .leaflet-popup-tip { background: rgba(10,18,35,.95); }
   .leaflet-popup-content { margin: 0; padding: 0; }
   .popup-header {
-    background: linear-gradient(135deg, #1B4F8A, #0d2d52);
-    padding: 12px 14px; border-radius: 10px 10px 0 0;
+    background: linear-gradient(135deg,#1B4F8A,#163d6e);
+    padding: 12px 15px; border-radius: 12px 12px 0 0;
+    border-bottom: 1px solid rgba(96,165,250,.2);
   }
-  .popup-header .well-name { font-size: 15px; font-weight: 700; color: #fff; }
-  .popup-header .well-id  { font-size: 10px; color: #adc8e8; margin-top: 2px; }
-  .popup-body { padding: 12px 14px; }
+  .popup-header .well-name { font-size: 14px; font-weight: 700; color: #fff; line-height: 1.3; }
+  .popup-header .well-id  { font-size: 10px; color: #90bce0; margin-top: 3px; }
+  .popup-body { padding: 10px 15px; }
   .popup-row {
-    display: flex; justify-content: space-between;
-    font-size: 12px; padding: 4px 0; border-bottom: 1px solid #1e293b;
+    display: flex; justify-content: space-between; align-items: flex-start;
+    font-size: 11.5px; padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,.05);
   }
   .popup-row:last-child { border-bottom: none; }
-  .popup-row .lbl { color: #888; }
-  .popup-row .val { color: #e2e8f0; text-align: right; max-width: 60%; word-break: break-word; }
-  .popup-row .val.good { color: #4ade80; }
+  .popup-row .lbl { color: #6b7e99; flex-shrink: 0; margin-right: 8px; }
+  .popup-row .val { color: #cbd5e1; text-align: right; word-break: break-word; }
+  .popup-row .val.good { color: #4ade80; font-weight: 600; }
   .popup-row .val.warn { color: #fbbf24; }
-  .popup-footer { padding: 10px 14px 12px; border-top: 1px solid #1e293b; }
+  .popup-row .val.coords { font-family: monospace; font-size: 10.5px; color: #93c5fd; }
+  .popup-footer { padding: 10px 15px 12px; border-top: 1px solid rgba(255,255,255,.07); }
   .pdf-link {
-    display: block; text-align: center; padding: 8px;
-    background: #1B4F8A; color: #fff; text-decoration: none;
-    border-radius: 6px; font-size: 12px; font-weight: 600;
-    transition: background .15s;
+    display: block; text-align: center; padding: 9px;
+    background: linear-gradient(135deg,#1B4F8A,#2563eb); color: #fff;
+    text-decoration: none; border-radius: 7px; font-size: 12px; font-weight: 600;
+    transition: opacity .15s; letter-spacing: .3px;
   }
-  .pdf-link:hover { background: #2563a0; }
-  .s3-path {
-    font-size: 10px; color: #555; margin-top: 6px;
-    word-break: break-all; text-align: center;
+  .pdf-link:hover { opacity: .85; }
+  .s3-path { font-size: 9.5px; color: #3a4a60; margin-top: 6px; word-break: break-all; text-align: center; }
+
+  /* Open Street Maps button in GMaps style */
+  .gm-style-btn {
+    background: #fff; color: #444; border: none; border-radius: 3px;
+    padding: 5px 8px; font-size: 11px; cursor: pointer;
+    box-shadow: 0 1px 4px rgba(0,0,0,.3);
   }
 
   /* Loading overlay */
   #loading {
-    position: fixed; inset: 0; background: rgba(10,15,30,.92);
+    position: fixed; inset: 0; background: rgba(5,10,20,.95);
     display: flex; flex-direction: column; align-items: center; justify-content: center;
-    z-index: 9999; transition: opacity .3s;
+    z-index: 9999; transition: opacity .4s;
   }
+  #loading .logo-large { font-size: 48px; margin-bottom: 16px; }
   #loading .spinner {
-    width: 48px; height: 48px; border: 4px solid #1B4F8A;
+    width: 44px; height: 44px; border: 4px solid rgba(27,79,138,.4);
     border-top-color: #60a5fa; border-radius: 50%;
-    animation: spin 0.8s linear infinite; margin-bottom: 16px;
+    animation: spin 0.8s linear infinite; margin-bottom: 14px;
   }
-  #loading p { color: #adc8e8; font-size: 14px; }
-  #loading #load-detail { color: #555; font-size: 11px; margin-top: 6px; }
+  #loading h2 { color: #fff; font-size: 18px; font-weight: 700; margin-bottom: 6px; }
+  #loading p { color: #6b7e99; font-size: 13px; }
+  #load-detail { color: #4a6080; font-size: 11px; margin-top: 6px; max-width: 350px; text-align: center; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
+  /* Scale bar fix on satellite */
+  .leaflet-control-scale-line { background: rgba(255,255,255,.85) !important; color: #222 !important; border-color: #555 !important; }
+
   /* Scrollbar */
-  ::-webkit-scrollbar { width: 6px; }
-  ::-webkit-scrollbar-track { background: #0f172a; }
-  ::-webkit-scrollbar-thumb { background: #2a3a5c; border-radius: 3px; }
+  ::-webkit-scrollbar { width: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(255,255,255,.12); border-radius: 3px; }
+
+  /* Satellite search box (top-center) */
+  #search-bar {
+    position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+    z-index: 1000; display: flex; gap: 6px; align-items: center;
+    background: rgba(10,18,35,.88); border: 1px solid rgba(96,165,250,.3);
+    border-radius: 24px; padding: 6px 14px; backdrop-filter: blur(10px);
+    box-shadow: 0 4px 16px rgba(0,0,0,.4); min-width: 320px;
+  }
+  #search-bar input {
+    background: transparent; border: none; color: #eee; font-size: 13px;
+    outline: none; flex: 1; margin: 0; padding: 0;
+  }
+  #search-bar input::placeholder { color: #4a6080; }
+  #search-bar .search-icon { color: #4a90d9; font-size: 14px; flex-shrink: 0; }
 </style>
 </head>
 <body>
 
+<!-- Loading screen -->
 <div id="loading">
+  <div class="logo-large">🛢️</div>
   <div class="spinner"></div>
-  <p>Loading Oklahoma Well Records...</p>
-  <p id="load-detail">Fetching location data from S3</p>
+  <h2>OSU Well Records Map</h2>
+  <p>Loading Oklahoma historical oil &amp; gas wells...</p>
+  <p id="load-detail">Fetching verified well locations from S3</p>
 </div>
 
+<!-- Header -->
 <div id="header">
+  <div class="logo">🛢️</div>
   <div>
     <h1>OSU Oklahoma Well Records — Interactive Map</h1>
-    <div class="subtitle">Historical oil &amp; gas well permits 1911–2024 · Coordinates extracted via 4-stage OCR/AI pipeline</div>
+    <div class="subtitle">Historical oil &amp; gas well permits 1911–2024 · OCR / AI pipeline · GPS coordinates extracted from scanned PDFs</div>
   </div>
+  <button class="header-btn" onclick="toggleSidebar()">☰ Filters</button>
+  <button class="header-btn" onclick="fitOklahoma()">📍 Oklahoma</button>
   <div id="well-count-badge">Loading...</div>
 </div>
 
 <div id="main">
+  <!-- Sidebar -->
   <div id="sidebar">
     <div id="sidebar-inner">
 
@@ -174,25 +233,26 @@
       <div class="stat-grid">
         <div class="stat-box"><div class="val" id="stat-total">—</div><div class="lbl">Wells Mapped</div></div>
         <div class="stat-box"><div class="val" id="stat-counties">—</div><div class="lbl">Counties</div></div>
-        <div class="stat-box"><div class="val" id="stat-year-min">—</div><div class="lbl">Earliest Year</div></div>
-        <div class="stat-box"><div class="val" id="stat-year-max">—</div><div class="lbl">Latest Year</div></div>
+        <div class="stat-box"><div class="val" id="stat-year-min">—</div><div class="lbl">Earliest</div></div>
+        <div class="stat-box"><div class="val" id="stat-year-max">—</div><div class="lbl">Latest</div></div>
       </div>
 
       <!-- Filters -->
       <div class="section-label">Filter Wells</div>
-      <input type="text" id="search-county" placeholder="County name...">
-      <select id="filter-collection">
-        <option value="">All Collections</option>
+      <input type="text" id="search-county" placeholder="🔍 County name...">
+      <input type="text" id="search-wellname" placeholder="🔍 Well name or API number...">
+      <select id="filter-collection"><option value="">All Collections (1–13)</option></select>
+      <select id="filter-decade"><option value="">All Decades</option></select>
+      <select id="filter-resolution">
+        <option value="">All Resolution Types</option>
+        <option value="quadrant_direct">Quadrant Direct</option>
+        <option value="rds_lookup">RDS PLSS Lookup</option>
       </select>
-      <select id="filter-decade">
-        <option value="">All Decades</option>
-      </select>
-      <input type="text" id="search-wellname" placeholder="Well name or ID...">
       <button class="filter-btn" onclick="applyFilters()">Apply Filters</button>
-      <button class="reset-btn" onclick="resetFilters()">Reset</button>
+      <button class="reset-btn" onclick="resetFilters()">↺ Reset All Filters</button>
 
       <!-- Legend -->
-      <div class="section-label">Decade Legend <span style="color:#555;font-size:10px;font-weight:400">(click to toggle)</span></div>
+      <div class="section-label">Decade Legend <span style="color:#3a4a60;font-size:9px;font-weight:400">(click to toggle)</span></div>
       <div id="legend"></div>
 
       <!-- Top Counties -->
@@ -200,103 +260,160 @@
       <div id="county-list"></div>
 
       <!-- Data info -->
-      <div class="section-label">Data Source</div>
-      <div style="font-size:11px;color:#666;line-height:1.6">
+      <div class="section-label">About This Dataset</div>
+      <div style="font-size:10px;color:#3a4a60;line-height:1.6">
         Coordinates resolved via quadrant-direct mapping from PLSS grid dot positions on scanned well permit PDFs.
-        Source: OSU well records pipeline · AWS Batch · Gemini Flash/Pro AI extraction.
+        Pipeline: AWS Batch → Google Vision OCR → Gemini Flash AI → PostgreSQL PLSS lookup.
         <br><br>
-        <strong style="color:#aaa">Last updated:</strong> <span id="data-updated">—</span>
+        <strong style="color:#5a7090">Updated:</strong> <span id="data-updated">—</span>
+        <br>
+        <strong style="color:#5a7090">Source:</strong> OSU Well Records · AWS S3
       </div>
 
     </div>
   </div>
 
-  <div id="map"></div>
+  <!-- Map -->
+  <div id="map">
+    <!-- Floating search bar overlay -->
+    <div id="search-bar">
+      <span class="search-icon">🔍</span>
+      <input type="text" id="quick-search" placeholder="Search wells, counties, API numbers..." oninput="quickSearch(this.value)">
+    </div>
+  </div>
 </div>
 
 <script>
-// ─── Configuration ────────────────────────────────────────────────────────────
-const BUCKET = "osu-well-records-225989338968";
+// ─── Config ───────────────────────────────────────────────────────────────────
+const BUCKET   = "osu-well-records-225989338968";
 const DATA_URL = `https://${BUCKET}.s3.amazonaws.com/viewer/well_locations.json`;
 
-// Decade colors (dark-background-friendly)
+// Decade → bright color, visible on BOTH satellite and dark backgrounds
 const DECADE_COLORS = {
-  "1910s": "#60a5fa",   // bright blue
-  "1920s": "#34d399",   // teal green
-  "1930s": "#a78bfa",   // purple
-  "1940s": "#fb923c",   // orange
-  "1950s": "#facc15",   // yellow
-  "1960s": "#f87171",   // coral
-  "1970s": "#38bdf8",   // sky blue
-  "1980s": "#4ade80",   // green
-  "1990s": "#e879f9",   // pink
-  "2000s": "#fda4af",   // rose
-  "2010s": "#c084fc",   // violet
-  "2020s": "#86efac",   // mint
-  "unknown": "#94a3b8"  // gray
+  "1910s": "#ff6b6b",   // vivid red
+  "1920s": "#ffd93d",   // golden yellow
+  "1930s": "#6bcb77",   // green
+  "1940s": "#4d96ff",   // bright blue
+  "1950s": "#ff6bce",   // hot pink
+  "1960s": "#ff9f43",   // orange
+  "1970s": "#48dbfb",   // cyan
+  "1980s": "#a29bfe",   // lavender
+  "1990s": "#fd79a8",   // rose
+  "2000s": "#55efc4",   // mint
+  "2010s": "#fdcb6e",   // amber
+  "2020s": "#e17055",   // terra cotta
+  "unknown": "#b2bec3"  // light gray
 };
 
 // ─── State ────────────────────────────────────────────────────────────────────
-let allFeatures = [];
-let markerLayer;
-let map;
-let hiddenDecades = new Set();
-let currentFilters = {};
+let allFeatures    = [];
+let markerLayer    = null;
+let map            = null;
+let hiddenDecades  = new Set();
+let sidebarOpen    = true;
+let quickSearchVal = "";
 
 // ─── Map init ─────────────────────────────────────────────────────────────────
 function initMap() {
   map = L.map("map", {
-    center: [35.5, -97.5],   // Oklahoma centroid
+    center: [35.5, -97.5],
     zoom: 7,
-    preferCanvas: true
+    preferCanvas: true,
+    zoomControl: false
   });
 
-  // Google Maps-style satellite/hybrid tiles (no key required via this provider)
-  const streets = L.tileLayer(
-    "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
-    { attribution: "© OpenStreetMap © CartoDB", subdomains: "abcd", maxZoom: 20 }
-  ).addTo(map);
-
+  // ── Tile layers ──────────────────────────────────────────────────────────────
+  // 1. Satellite — Esri World Imagery (very high res, shows buildings/trees/terrain)
   const satellite = L.tileLayer(
     "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-    { attribution: "© Esri World Imagery", maxZoom: 20 }
+    { attribution: "© Esri, Maxar, Earthstar Geographics", maxZoom: 21, maxNativeZoom: 19 }
   );
 
-  const hybrid = L.tileLayer(
-    "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
-    { attribution: "© Esri", maxZoom: 20, opacity: 0.7 }
-  );
+  // 2. Hybrid — Satellite + Roads/Labels overlay (closest to Google Maps Hybrid)
+  const hybrid = L.layerGroup([
+    L.tileLayer(
+      "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+      { attribution: "© Esri World Imagery", maxZoom: 21, maxNativeZoom: 19 }
+    ),
+    L.tileLayer(
+      "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
+      { attribution: "© Esri Reference", maxZoom: 21, maxNativeZoom: 19, opacity: 1.0 }
+    ),
+    L.tileLayer(
+      "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}",
+      { attribution: "© Esri Transportation", maxZoom: 21, maxNativeZoom: 19, opacity: 0.9 }
+    )
+  ]);
 
-  const roadmap = L.tileLayer(
+  // 3. Street / Road — OpenStreetMap (detailed roads, buildings labels)
+  const streets = L.tileLayer(
     "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-    { attribution: "© OpenStreetMap", maxZoom: 20 }
+    { attribution: "© OpenStreetMap contributors", maxZoom: 21, subdomains: "abc" }
   );
+
+  // 4. Terrain — USGS Topo + Esri World Topo
+  const terrain = L.tileLayer(
+    "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
+    { attribution: "© Esri, USGS, NGA, EPA", maxZoom: 21, maxNativeZoom: 19 }
+  );
+
+  // 5. Dark — for analysis
+  const dark = L.tileLayer(
+    "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+    { attribution: "© OpenStreetMap © CartoDB", subdomains: "abcd", maxZoom: 20 }
+  );
+
+  // Default: Hybrid (satellite + roads — most Google Maps-like)
+  hybrid.addTo(map);
 
   const baseMaps = {
-    "Dark (default)": streets,
-    "Satellite": satellite,
-    "Roadmap": roadmap
+    "🛰️ Satellite": satellite,
+    "🗺️ Hybrid (Satellite + Roads)": hybrid,   // ← DEFAULT
+    "🏘️ Street Map": streets,
+    "⛰️ Terrain / Topo": terrain,
+    "🌑 Dark": dark
   };
-  L.control.layers(baseMaps, {}, { position: "topright" }).addTo(map);
 
-  // Scale
-  L.control.scale({ imperial: true, metric: true }).addTo(map);
+  L.control.layers(baseMaps, {}, { position: "topright", collapsed: false }).addTo(map);
+
+  // Zoom control (bottom right)
+  L.control.zoom({ position: "bottomright" }).addTo(map);
+
+  // Scale bar
+  L.control.scale({ imperial: true, metric: true, position: "bottomleft" }).addTo(map);
 }
 
-// ─── Marker creation ──────────────────────────────────────────────────────────
-function makeIcon(decade, confidence) {
-  const color = DECADE_COLORS[decade] || DECADE_COLORS["unknown"];
-  const size  = confidence > 90 ? 10 : confidence > 70 ? 8 : 6;
-  const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='${size+4}' height='${size+4}'>
-    <circle cx='${(size+4)/2}' cy='${(size+4)/2}' r='${size/2}'
-      fill='${color}' stroke='rgba(0,0,0,0.5)' stroke-width='1.5' opacity='0.85'/>
+// ─── Marker icons ─────────────────────────────────────────────────────────────
+// Google Maps-style teardrop pins — highly visible on satellite
+function makePin(decade, confidence) {
+  const color  = DECADE_COLORS[decade] || DECADE_COLORS["unknown"];
+  const size   = confidence >= 90 ? 14 : confidence >= 70 ? 12 : 10;
+  const r      = size / 2;
+
+  // SVG teardrop pin (like Google Maps)
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${size + 4}" height="${size * 1.6 + 4}" viewBox="0 0 ${size+4} ${size*1.6+4}">
+    <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%">
+      <feDropShadow dx="0" dy="1" stdDeviation="1.5" flood-color="rgba(0,0,0,0.6)"/>
+    </filter>
+    <g filter="url(#shadow)">
+      <!-- Teardrop body -->
+      <path d="M ${r+2} 2
+               A ${r} ${r} 0 0 1 ${r*2+2} ${r+2}
+               Q ${r*2+2} ${r*1.6+2} ${r+2} ${size*1.6+2}
+               Q ${2} ${r*1.6+2} ${2} ${r+2}
+               A ${r} ${r} 0 0 1 ${r+2} 2 Z"
+            fill="${color}" stroke="white" stroke-width="1.5"/>
+      <!-- Inner dot -->
+      <circle cx="${r+2}" cy="${r+2}" r="${r*0.4}" fill="white" opacity="0.8"/>
+    </g>
   </svg>`;
+
   return L.divIcon({
     html: `<img src="data:image/svg+xml,${encodeURIComponent(svg)}" style="display:block">`,
-    iconSize: [size+4, size+4],
-    iconAnchor: [(size+4)/2, (size+4)/2],
-    popupAnchor: [0, -(size/2+4)],
-    className: ""
+    iconSize:    [size + 4, size * 1.6 + 4],
+    iconAnchor:  [(size + 4) / 2, size * 1.6 + 4],   // tip at bottom
+    popupAnchor: [0, -(size * 1.6 + 4)],
+    className:   ""
   });
 }
 
@@ -304,40 +421,56 @@ function makeIcon(decade, confidence) {
 function confClass(c) { return c >= 90 ? "good" : c >= 70 ? "warn" : ""; }
 
 function buildPopup(p) {
-  // Parse well name from stem
   const nameParts = (p.pdf_stem || "").split("_");
   const wellName  = nameParts.length >= 2 ? nameParts.slice(1, -1).join(" ") : p.pdf_stem;
   const wellId    = nameParts[0] || "";
   const apino     = nameParts[nameParts.length - 1] || "";
 
-  const str = [
-    p.section ? `Sec ${p.section}` : "",
-    p.township ? `T${p.township}N` : "",
-    p.range    ? `R${p.range}`     : ""
+  const plss = [
+    p.section  ? `Sec ${p.section}`  : "",
+    p.township ? `T${p.township}N`   : "",
+    p.range    ? `R${p.range}W`      : ""
   ].filter(Boolean).join(", ");
 
-  const colNum = p.collection || "?";
-  const pdfUrl = (p.pdf_path || "").replace("s3://", `https://s3.amazonaws.com/`);
-  const pdfS3  = p.pdf_path || "";
+  const pdfS3   = p.pdf_path || "";
+  const pdfUrl  = pdfS3
+    ? `https://osu-well-records-225989338968.s3.amazonaws.com/${pdfS3.replace(/^s3:\/\/[^/]+\//, "")}`
+    : "#";
+
+  const googleMapsLink = `https://www.google.com/maps/search/?api=1&query=${p.lat},${p.lon}`;
 
   return `
 <div class="popup-header">
-  <div class="well-name">${wellName || p.pdf_stem}</div>
-  <div class="well-id">API No: ${apino} &nbsp;·&nbsp; ID: ${wellId}</div>
+  <div class="well-name">${wellName || p.pdf_stem || "Unknown Well"}</div>
+  <div class="well-id">API: ${apino} &nbsp;·&nbsp; Record ID: ${wellId}</div>
 </div>
 <div class="popup-body">
-  <div class="popup-row"><span class="lbl">Collection</span><span class="val">${colNum} (${p.decade || "—"})</span></div>
-  <div class="popup-row"><span class="lbl">Year / Month</span><span class="val">${p.year || "—"} ${p.month ? "· " + p.month.replace(/^\d+ - /, "") : ""}</span></div>
+  <div class="popup-row"><span class="lbl">Collection</span><span class="val">Col. ${p.collection || "?"} &nbsp;(${p.decade || "—"})</span></div>
+  <div class="popup-row"><span class="lbl">Filed</span><span class="val">${p.year || "—"}${p.month ? " &bull; " + p.month.replace(/^\d+ - /, "") : ""}</span></div>
   <div class="popup-row"><span class="lbl">County</span><span class="val">${p.county || "—"}</span></div>
-  <div class="popup-row"><span class="lbl">PLSS Location</span><span class="val">${str || "—"}</span></div>
+  <div class="popup-row"><span class="lbl">PLSS Location</span><span class="val">${plss || "—"}</span></div>
   <div class="popup-row"><span class="lbl">Quadrant</span><span class="val">${p.quadrant || "—"}</span></div>
-  <div class="popup-row"><span class="lbl">Coordinates</span><span class="val">${(+p.lat).toFixed(5)}°N, ${(+p.lon).toFixed(5)}°W</span></div>
+  <div class="popup-row"><span class="lbl">Coordinates</span><span class="val coords">${(+p.lat).toFixed(5)}°N, ${(+p.lon).toFixed(5)}°W</span></div>
   <div class="popup-row"><span class="lbl">Resolution</span><span class="val">${p.resolution || "—"}</span></div>
-  <div class="popup-row"><span class="lbl">Confidence</span><span class="val ${confClass(p.confidence)}">${p.confidence}%</span></div>
+  <div class="popup-row"><span class="lbl">AI Confidence</span><span class="val ${confClass(p.confidence)}">${p.confidence}%</span></div>
   ${p.flags ? `<div class="popup-row"><span class="lbl">Flags</span><span class="val warn">${p.flags}</span></div>` : ""}
 </div>
 <div class="popup-footer">
-  <a class="pdf-link" href="${pdfUrl}" target="_blank" rel="noopener">📄 View Well Record PDF</a>
+  <a class="pdf-link" href="${pdfUrl}" target="_blank" rel="noopener">📄 View Original Well Record PDF</a>
+  <div style="display:flex;gap:6px;margin-top:6px">
+    <a href="${googleMapsLink}" target="_blank" rel="noopener"
+       style="flex:1;text-align:center;padding:6px;background:rgba(255,255,255,.06);
+              border:1px solid rgba(255,255,255,.1);border-radius:6px;
+              color:#90bce0;font-size:10px;text-decoration:none;">
+      🗺️ Google Maps
+    </a>
+    <span onclick="navigator.clipboard.writeText('${(+p.lat).toFixed(6)},${(+p.lon).toFixed(6)}')"
+       style="flex:1;text-align:center;padding:6px;background:rgba(255,255,255,.06);
+              border:1px solid rgba(255,255,255,.1);border-radius:6px;
+              color:#90bce0;font-size:10px;cursor:pointer;">
+      📋 Copy Coords
+    </span>
+  </div>
   <div class="s3-path">${pdfS3}</div>
 </div>`;
 }
@@ -347,41 +480,50 @@ function renderMarkers(features) {
   if (markerLayer) map.removeLayer(markerLayer);
 
   markerLayer = L.markerClusterGroup({
-    maxClusterRadius: 40,
-    disableClusteringAtZoom: 14,
+    maxClusterRadius: 50,
+    disableClusteringAtZoom: 13,
     spiderfyOnMaxZoom: true,
     showCoverageOnHover: false,
+    chunkedLoading: true,
+    chunkInterval: 100,
     iconCreateFunction(cluster) {
-      const count = cluster.getChildCount();
-      const size  = count > 1000 ? 48 : count > 100 ? 38 : 28;
+      const n    = cluster.getChildCount();
+      const size = n > 500 ? 50 : n > 100 ? 40 : n > 20 ? 32 : 24;
+      const fs   = size > 40 ? 14 : size > 30 ? 12 : 10;
+      // Satellite-visible cluster: white ring + semi-transparent fill
       return L.divIcon({
-        html: `<div style="width:${size}px;height:${size}px;border-radius:50%;
-          background:rgba(27,79,138,.85);border:2px solid #60a5fa;
-          display:flex;align-items:center;justify-content:center;
-          color:#fff;font-weight:700;font-size:${size > 38 ? 13 : 11}px">${count}</div>`,
-        iconSize: [size, size], iconAnchor: [size/2, size/2], className: ""
+        html: `<div style="
+          width:${size}px; height:${size}px; border-radius:50%;
+          background:rgba(13,45,82,.85);
+          border:2.5px solid rgba(255,255,255,.8);
+          box-shadow:0 2px 8px rgba(0,0,0,.6);
+          display:flex; align-items:center; justify-content:center;
+          color:#fff; font-weight:800; font-size:${fs}px;
+          font-family:'Segoe UI',Arial,sans-serif;">${n}</div>`,
+        iconSize:   [size, size],
+        iconAnchor: [size/2, size/2],
+        className:  ""
       });
     }
   });
 
   features.forEach(f => {
-    const p   = f.properties;
-    const lat = f.geometry.coordinates[1];
-    const lon = f.geometry.coordinates[0];
-    const marker = L.marker([lat, lon], { icon: makeIcon(p.decade, p.confidence) });
-    marker.bindPopup(buildPopup(p), { maxWidth: 340, className: "well-popup" });
+    const p      = f.properties;
+    const lat    = f.geometry.coordinates[1];
+    const lon    = f.geometry.coordinates[0];
+    const marker = L.marker([lat, lon], { icon: makePin(p.decade, p.confidence) });
+    marker.bindPopup(buildPopup(p), { maxWidth: 360, className: "well-popup" });
     markerLayer.addLayer(marker);
   });
 
   map.addLayer(markerLayer);
 }
 
-// ─── Sidebar stats ────────────────────────────────────────────────────────────
+// ─── Sidebar stats / UI ───────────────────────────────────────────────────────
 function updateStats(features) {
-  const years    = features.map(f => +f.properties.year).filter(Boolean);
+  const years    = features.map(f => +f.properties.year).filter(y => y > 1800 && y < 2100);
   const counties = new Set(features.map(f => f.properties.county).filter(Boolean));
-
-  document.getElementById("stat-total").textContent   = features.length.toLocaleString();
+  document.getElementById("stat-total").textContent    = features.length.toLocaleString();
   document.getElementById("stat-counties").textContent = counties.size;
   document.getElementById("stat-year-min").textContent = years.length ? Math.min(...years) : "—";
   document.getElementById("stat-year-max").textContent = years.length ? Math.max(...years) : "—";
@@ -393,72 +535,60 @@ function buildLegend() {
   el.innerHTML = "";
   Object.entries(DECADE_COLORS).forEach(([decade, color]) => {
     const row = document.createElement("div");
-    row.className = "legend-row";
+    row.className    = "legend-row";
     row.dataset.decade = decade;
-    row.innerHTML = `<div class="legend-dot" style="background:${color}"></div><span>${decade}</span>`;
+    row.innerHTML    = `<div class="legend-dot" style="background:${color}"></div><span>${decade}</span>`;
     row.addEventListener("click", () => toggleDecade(decade, row));
     el.appendChild(row);
   });
 }
 
 function toggleDecade(decade, row) {
-  if (hiddenDecades.has(decade)) {
-    hiddenDecades.delete(decade);
-    row.classList.remove("hidden-decade");
-  } else {
-    hiddenDecades.add(decade);
-    row.classList.add("hidden-decade");
-  }
+  if (hiddenDecades.has(decade)) { hiddenDecades.delete(decade); row.classList.remove("hidden-decade"); }
+  else { hiddenDecades.add(decade); row.classList.add("hidden-decade"); }
   applyFilters();
 }
 
 function buildCountyList(features) {
-  const countyCounts = {};
-  features.forEach(f => {
-    const c = f.properties.county;
-    if (c) countyCounts[c] = (countyCounts[c] || 0) + 1;
-  });
-  const sorted = Object.entries(countyCounts).sort((a,b) => b[1]-a[1]).slice(0, 15);
+  const cnt = {};
+  features.forEach(f => { const c = f.properties.county; if (c) cnt[c] = (cnt[c]||0)+1; });
+  const sorted = Object.entries(cnt).sort((a,b) => b[1]-a[1]).slice(0, 15);
   const max    = sorted[0]?.[1] || 1;
-  const el     = document.getElementById("county-list");
-  el.innerHTML = sorted.map(([name, cnt]) => `
+  document.getElementById("county-list").innerHTML = sorted.map(([name, n]) => `
     <div class="county-item">
-      <div>
-        <div>${name}</div>
-        <div class="county-bar" style="width:${Math.round(cnt/max*100)}%"></div>
-      </div>
-      <span style="color:#60a5fa;font-weight:700">${cnt}</span>
+      <span>${name}</span>
+      <div class="county-bar-wrap"><div class="county-bar" style="width:${Math.round(n/max*100)}%"></div></div>
+      <span style="color:#60a5fa;font-weight:700;min-width:28px;text-align:right">${n}</span>
     </div>`).join("");
 }
 
 function populateDropdowns(features) {
-  const collections = [...new Set(features.map(f => f.properties.collection))].sort((a,b)=>+a-+b);
-  const decades     = [...new Set(features.map(f => f.properties.decade))].filter(Boolean).sort();
-
-  const colSel = document.getElementById("filter-collection");
-  collections.forEach(c => {
-    const o = document.createElement("option"); o.value = c; o.textContent = `Collection ${c}`; colSel.appendChild(o);
-  });
-  const decSel = document.getElementById("filter-decade");
-  decades.forEach(d => {
-    const o = document.createElement("option"); o.value = d; o.textContent = d; decSel.appendChild(o);
-  });
+  const cols   = [...new Set(features.map(f => f.properties.collection))].filter(Boolean).sort((a,b)=>+a-+b);
+  const decades = [...new Set(features.map(f => f.properties.decade))].filter(Boolean).sort();
+  const colSel  = document.getElementById("filter-collection");
+  const decSel  = document.getElementById("filter-decade");
+  cols.forEach(c => { const o = document.createElement("option"); o.value = c; o.textContent = `Collection ${c}`; colSel.appendChild(o); });
+  decades.forEach(d => { const o = document.createElement("option"); o.value = d; o.textContent = d; decSel.appendChild(o); });
 }
 
 // ─── Filtering ────────────────────────────────────────────────────────────────
 function applyFilters() {
-  const county   = document.getElementById("search-county").value.toLowerCase().trim();
-  const col      = document.getElementById("filter-collection").value;
-  const decade   = document.getElementById("filter-decade").value;
-  const wellName = document.getElementById("search-wellname").value.toLowerCase().trim();
+  const county  = document.getElementById("search-county").value.toLowerCase().trim();
+  const well    = document.getElementById("search-wellname").value.toLowerCase().trim();
+  const col     = document.getElementById("filter-collection").value;
+  const decade  = document.getElementById("filter-decade").value;
+  const resol   = document.getElementById("filter-resolution").value;
+  const qs      = quickSearchVal.toLowerCase().trim();
 
   const filtered = allFeatures.filter(f => {
     const p = f.properties;
-    if (hiddenDecades.has(p.decade)) return false;
-    if (county   && !(p.county   || "").toLowerCase().includes(county))   return false;
-    if (col      && p.collection !== col)                                   return false;
-    if (decade   && p.decade !== decade)                                    return false;
-    if (wellName && !(p.well_name || p.pdf_stem || "").toLowerCase().includes(wellName)) return false;
+    if (hiddenDecades.has(p.decade))                                                         return false;
+    if (county && !(p.county||"").toLowerCase().includes(county))                            return false;
+    if (col    && p.collection !== col)                                                      return false;
+    if (decade && p.decade !== decade)                                                       return false;
+    if (resol  && !(p.resolution||"").toLowerCase().includes(resol))                         return false;
+    if (well   && ![(p.well_name||""),(p.pdf_stem||"")].some(s=>s.toLowerCase().includes(well))) return false;
+    if (qs     && ![(p.well_name||""),(p.county||""),(p.pdf_stem||"")].some(s=>s.toLowerCase().includes(qs))) return false;
     return true;
   });
 
@@ -468,65 +598,79 @@ function applyFilters() {
 }
 
 function resetFilters() {
-  document.getElementById("search-county").value   = "";
-  document.getElementById("filter-collection").value = "";
-  document.getElementById("filter-decade").value   = "";
-  document.getElementById("search-wellname").value  = "";
+  ["search-county","search-wellname","quick-search"].forEach(id => document.getElementById(id).value = "");
+  ["filter-collection","filter-decade","filter-resolution"].forEach(id => document.getElementById(id).value = "");
   hiddenDecades.clear();
+  quickSearchVal = "";
   document.querySelectorAll(".legend-row").forEach(r => r.classList.remove("hidden-decade"));
   applyFilters();
+}
+
+let searchTimer = null;
+function quickSearch(val) {
+  quickSearchVal = val;
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(applyFilters, 300);   // debounce
+}
+
+// ─── Sidebar toggle ───────────────────────────────────────────────────────────
+function toggleSidebar() {
+  const sb = document.getElementById("sidebar");
+  sidebarOpen = !sidebarOpen;
+  sb.style.display = sidebarOpen ? "flex" : "none";
+  setTimeout(() => map.invalidateSize(), 200);
+}
+
+// ─── Oklahoma fit ─────────────────────────────────────────────────────────────
+function fitOklahoma() {
+  map.fitBounds([[33.5, -103.1], [37.1, -94.4]], { padding: [30, 30] });
 }
 
 // ─── Data loading ─────────────────────────────────────────────────────────────
 async function loadData() {
   const detail = document.getElementById("load-detail");
   try {
-    detail.textContent = `Fetching ${DATA_URL}`;
+    detail.textContent = "Connecting to AWS S3...";
     const resp = await fetch(DATA_URL);
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status} — ${resp.statusText}`);
+
     detail.textContent = "Parsing well location data...";
     const geojson = await resp.json();
-
     allFeatures = geojson.features || [];
-    detail.textContent = `Rendering ${allFeatures.length.toLocaleString()} markers...`;
 
-    // Update timestamp
-    if (geojson.generated) {
-      document.getElementById("data-updated").textContent =
-        new Date(geojson.generated).toLocaleString();
-    }
+    if (geojson.generated)
+      document.getElementById("data-updated").textContent = new Date(geojson.generated).toLocaleString();
 
-    // Build UI
+    detail.textContent = `Rendering ${allFeatures.length.toLocaleString()} well markers...`;
+
     populateDropdowns(allFeatures);
     buildLegend();
     buildCountyList(allFeatures);
     updateStats(allFeatures);
     renderMarkers(allFeatures);
 
-    // Fit Oklahoma bounds
+    // Fit to data bounds
     if (allFeatures.length > 0) {
       const lats = allFeatures.map(f => f.geometry.coordinates[1]);
       const lons = allFeatures.map(f => f.geometry.coordinates[0]);
       map.fitBounds([
-        [Math.min(...lats)-0.3, Math.min(...lons)-0.3],
-        [Math.max(...lats)+0.3, Math.max(...lons)+0.3]
-      ]);
+        [Math.min(...lats) - 0.3, Math.min(...lons) - 0.3],
+        [Math.max(...lats) + 0.3, Math.max(...lons) + 0.3]
+      ], { padding: [20, 20] });
     }
 
     // Hide loading
     const loading = document.getElementById("loading");
     loading.style.opacity = "0";
-    setTimeout(() => loading.style.display = "none", 300);
+    setTimeout(() => loading.style.display = "none", 400);
 
   } catch (err) {
-    detail.textContent = `Error: ${err.message}`;
     console.error(err);
-
-    // Show helpful error
     document.getElementById("load-detail").innerHTML =
-      `Failed to load data.<br>
-       Run <code>python merge_well_locations.py</code> then<br>
-       <code>python deploy_viewer.py</code> to publish the dataset.`;
+      `<strong style="color:#f87171">Failed to load well data</strong><br>
+       ${err.message}<br><br>
+       Run locally: <code>python merge_well_locations.py && python deploy_viewer.py</code><br>
+       Or open <code>well_map_standalone.html</code> for offline use.`;
   }
 }
 

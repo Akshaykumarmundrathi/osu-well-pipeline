@@ -1,0 +1,31 @@
+
+=== MONITORING CHECK 2026-05-22 00:10 UTC ===
+Status: HEALTHY
+Trigger: Post-context-compaction resume + Gemini key injection verification
+
+Batch Queue:
+  RUNNING:  30 (concurrent limit)
+  RUNNABLE: 2702 (2522 rev5-bulk + 180 retry-slice)
+  FAILED:   37 (all old; 0 new in last 6h)
+  SUCCEEDED: 14 (recent API window)
+
+S3 Results:
+  Total slice dirs: 391
+  Completed slices: 160
+  Remaining:        231
+
+Data Quality (all 160 completed slices):
+  Total records: 4,773
+  County rate:   100% (4,773/4,773) ← NEW API KEY WORKING PERFECTLY
+  Coord rate:    51% (2,449/4,773)
+
+New Gemini API Key: CONFIRMED WORKING
+  - All 18 previously-degraded slices now at 100% county extraction
+  - Slices completed after key injection (23:47, 23:58 UTC 05/21): 100%
+
+Degraded Slices Recovery: COMPLETE
+  All 18 slices (70,74,75,100,105,115,120,125,130,135,140,145,150,160,165,175,180,190)
+  now show 100% county extraction
+
+Disk: C: 7.4 GB free (97% full) - monitor
+Action: None required. Pipeline running normally.

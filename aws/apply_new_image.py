@@ -18,7 +18,7 @@ import boto3
 REGION        = "us-east-1"
 ACCOUNT_ID    = "225989338968"
 ECR_REPO      = f"{ACCOUNT_ID}.dkr.ecr.{REGION}.amazonaws.com/osu-pipeline"
-NEW_IMAGE_TAG = "v6-fixed-2"
+NEW_IMAGE_TAG = "v7-all-fixes"
 NEW_IMAGE     = f"{ECR_REPO}:{NEW_IMAGE_TAG}"
 JOB_DEF_NAME   = "osu-pipeline-job"
 INPUT_BUCKET   = "osu-well-records-225989338968"
@@ -132,7 +132,7 @@ def clear_failed_slice_states() -> int:
 
 def submit_array_job(job_def_arn: str, array_size: int) -> str:
     resp = batch.submit_job(
-        jobName="osu-pipeline-v6fixed2",
+        jobName="osu-pipeline-v7-all-fixes",
         jobQueue=JOB_QUEUE,
         jobDefinition=job_def_arn,
         arrayProperties={"size": array_size},
@@ -149,7 +149,7 @@ if __name__ == "__main__":
                         help=f"Records per slice (default {DEFAULT_SLICE})")
     args = parser.parse_args()
 
-    print("=== Applying v6-fixed-2 image ===\n")
+    print("=== Applying v7-all-fixes image ===\n")
 
     print("1. Verifying ECR image exists...")
     if not verify_image_exists():

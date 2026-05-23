@@ -935,7 +935,16 @@ def _dispatch(stage: str, manager: PDFDocumentManager,
 
     if stage == STAGE_GRID:
         from grid.scoring import process_single_grid
-        return process_single_grid(manager, out_dir, pdf_stem, log)
+        from config import TIER_EARLY, TIER_TRANSITION, tier_for
+        _cnum        = getattr(record, "collection_num", None) or 0
+        _tier        = tier_for(_cnum)
+        # Only skip the Tesseract anchor when we *know* this is an early/transition
+        # collection (handwritten docs with no printed anchor phrase). Unknown
+        # collection_num (0 / None) keeps anchor enabled so ad-hoc --flat runs
+        # still benefit from the anchor strategy.
+        _skip_anchor = bool(_cnum) and _tier in (TIER_EARLY, TIER_TRANSITION)
+        return process_single_grid(manager, out_dir, pdf_stem, log,
+                                   skip_anchor=_skip_anchor)
 
     if stage == STAGE_LOCATION:
         from config import TIER_CONFIG, tier_for
@@ -979,7 +988,7 @@ _RETRIED: set[str] = set()           # stems already retried this run
 
 
 def _retry_one_stage(stage: str, error_type: str, manager, out_dir: Path,
-                     pdf_stem: str, pdf_log):
+                     pdf_stem: str, pdf_log, skip_anchor: bool = False):
     """
     Re-run a single failed stage with a strategy chosen from `error_type`.
     Returns the new result dict (or None when no strategy applies).
@@ -1030,6 +1039,7 @@ def _retry_one_stage(stage: str, error_type: str, manager, out_dir: Path,
         from grid.scoring import process_single_grid
         return process_single_grid(
             manager, out_dir, pdf_stem, pdf_log, relaxed=True,
+            skip_anchor=skip_anchor,
         )
 
     if stage == STAGE_LATLONG:
@@ -1073,6 +1083,11 @@ def _retry_record(record: DatasetRecord, stages: tuple,
         STAGE_DOT:      paths.dots_dir(record),
     }
 
+    from config import TIER_EARLY, TIER_TRANSITION, tier_for as _tier_for
+    _cnum        = getattr(record, "collection_num", None) or 0
+    _tier        = _tier_for(_cnum)
+    _skip_anchor = bool(_cnum) and _tier in (TIER_EARLY, TIER_TRANSITION)
+
     parts: list[str] = []
     for stage in stages:
         if status.get_status(record.pdf_stem, stage) != FAILED:
@@ -1082,7 +1097,8 @@ def _retry_record(record: DatasetRecord, stages: tuple,
         t0 = time.monotonic()
         try:
             r = _retry_one_stage(stage, et, manager,
-                                 stage_dirs[stage], record.pdf_stem, pdf_log)
+                                 stage_dirs[stage], record.pdf_stem, pdf_log,
+                                 skip_anchor=_skip_anchor)
         except Exception as exc:
             pdf_log.error("[retry][%s] unhandled: %s", stage, exc, exc_info=True)
             r = {"detected": False, "error": str(exc)}

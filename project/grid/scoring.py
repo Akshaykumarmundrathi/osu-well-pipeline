@@ -160,17 +160,20 @@ def process_single_grid(
     pdf_stem: str,
     logger: logging.Logger | None = None,
     relaxed: bool = False,
+    skip_anchor: bool = False,
 ) -> dict:
     """
     Detect the section-township-range grid box on one of the PDF's pages.
 
-    `relaxed=False` -- strict size band, REVERSE page order (back-page first).
-    `relaxed=True`  -- loose size band, FORWARD page order. Used by the
-                       retry path so out-of-range grids on early pages are
-                       still caught.
+    `relaxed=False`    -- strict size band, REVERSE page order (back-page first).
+    `relaxed=True`     -- loose size band, FORWARD page order (retry path).
+    `skip_anchor=True` -- skip the structural-anchor OCR pass and go straight
+                          to full-page CV.  Use for early/transition tiers
+                          (handwritten 1911–1950s PDFs) where there is no
+                          printable anchor phrase and Tesseract just spins.
 
-    Each page is tried first with the structural anchor; on failure, the
-    full-page CV extractors run as a fallback.
+    Each page is tried first with the structural anchor (unless skip_anchor),
+    then falls back to the full-page CV extractors.
     """
     log = logger or logging.getLogger(__name__)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -198,9 +201,14 @@ def process_single_grid(
                 signal.alarm(_PAGE_TIMEOUT_S)
             try:
                 # Strategy 1: structural anchor + crop.
-                grid_img, bbox, method = _try_anchor_on_page(
-                    manager, page_num, cv_img, w_min, w_max, h_min, h_max, log,
-                )
+                # Skipped for early/transition tier: handwritten docs have no
+                # printed anchor phrase and Tesseract just spins uselessly.
+                if not skip_anchor:
+                    grid_img, bbox, method = _try_anchor_on_page(
+                        manager, page_num, cv_img, w_min, w_max, h_min, h_max, log,
+                    )
+                else:
+                    grid_img = bbox = method = None
 
                 # Strategy 2: full-page CV scan (fallback).
                 if grid_img is None:

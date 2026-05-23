@@ -707,10 +707,11 @@ def main():
             except Exception:
                 log.warning("Result analysis failed:\n%s", traceback.format_exc())
 
-        note = ("SIGTERM" if _terminating else
-                "ok"      if pipeline_exit == 0 else
-                f"logic_failed" if pipeline_exit == EXIT_LOGIC_FAILED else
-                f"api_saturated" if pipeline_exit == EXIT_API_SATURATED else
+        note = ("SIGTERM"       if _terminating else
+                "ok"           if pipeline_exit == 0 else
+                "logic_failed" if pipeline_exit == EXIT_LOGIC_FAILED else
+                "api_saturated" if pipeline_exit == EXIT_API_SATURATED else
+                "preempted"    if pipeline_exit == 130 else
                 f"exit={pipeline_exit}")
 
         log.info("Final upload (%.0fs elapsed, status=%s) ...", elapsed, note)

@@ -202,12 +202,17 @@ def _classify_slice(status_json: dict | None) -> str:
         # The long Batch retry delay provides natural backoff.
         return "infra_failed"
 
+    # SIGTERM preemption from Fargate: main.py exits 130 (128+SIGTERM).
+    # run_batch_job.py passes it through.  Always retryable.
+    if ec == 130:
+        return "infra_failed"
+
     # Container died quickly → infra issue (ECR pull, OOM-before-work, network).
     if elapsed < 60:
         return "infra_failed"
 
-    # Fargate preemption.
-    if "SIGTERM" in note:
+    # Fargate preemption (note-based, for older job_status.json files).
+    if "SIGTERM" in note or "preempted" in note:
         return "infra_failed"
 
     # Explicit infra keywords in legacy note field.

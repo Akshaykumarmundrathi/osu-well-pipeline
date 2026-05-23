@@ -636,6 +636,12 @@ def _process_record_worker(arg):
         STAGE_DOT:      paths.dots_dir(record),
     }
 
+    # Track whether a stage threw an unhandled exception.  PyMuPDF (fitz) can
+    # leave internal page caches in an undefined state after a mid-render error,
+    # causing cascade failures in subsequent stages.  Recreating the manager
+    # before the next stage gives each stage a clean document handle.
+    manager_dirty = False
+
     for stage in stages:
         label = _STAGE_LABEL.get(stage, stage)
 
@@ -664,15 +670,19 @@ def _process_record_worker(arg):
                 continue
 
         # Skip grid + location when lat/lon was already found (this run or prior).
+        # Only apply the "prior run" branch when resume=True — with --no-resume the
+        # prior row's latlong_lat/lon must not influence whether we run these stages.
         if stage in (STAGE_GRID, STAGE_LOCATION):
             ll_r = results.get(STAGE_LATLONG, {})
-            ll_found = (
-                (isinstance(ll_r, dict) and ll_r.get("detected", False))
-                or (bool(prior_row.get("latlong_lat"))
-                    and bool(prior_row.get("latlong_lon")))
+            ll_found_this_run = isinstance(ll_r, dict) and ll_r.get("detected", False)
+            ll_found_prior    = (
+                resume
+                and bool(prior_row.get("latlong_lat"))
+                and bool(prior_row.get("latlong_lon"))
             )
-            if ll_found:
-                lines.append(f"  {label:<{_COL}}skipped  (lat/lon found in document)")
+            if ll_found_this_run or ll_found_prior:
+                reason = "lat/lon found this run" if ll_found_this_run else "lat/lon found in prior run"
+                lines.append(f"  {label:<{_COL}}skipped  ({reason})")
                 results[stage] = SKIPPED
                 continue
 
@@ -688,6 +698,23 @@ def _process_record_worker(arg):
                 results[stage] = SKIPPED
                 continue
 
+        # If a prior stage left PyMuPDF in an undefined state, recreate the
+        # manager before attempting the next stage so each stage sees a clean
+        # document handle and failures don't cascade through all remaining stages.
+        if manager_dirty:
+            try:
+                manager = _make_manager(record)
+                manager_dirty = False
+                pdf_log.debug("manager recreated after prior stage exception")
+            except Exception as exc:
+                pdf_log.error("Cannot recreate PDF manager: %s", exc)
+                r = {"detected": False, "error": f"manager_recreate_failed: {exc}"}
+                if isinstance(r, dict):
+                    r["_elapsed"] = 0.0
+                lines.append(f"  {label:<{_COL}}{_format_stage_result(stage, r, 0.0)}")
+                results[stage] = r
+                continue
+
         t0 = time.monotonic()
         extra_kw: dict = {}
         if stage == STAGE_DOT:
@@ -700,6 +727,9 @@ def _process_record_worker(arg):
             pdf_log.error("[%s] unhandled exception: %s", stage.upper(), exc,
                           exc_info=True)
             r = {"detected": False, "error": str(exc)}
+            # Flag the manager as potentially corrupted so the next stage gets
+            # a fresh document handle rather than inheriting broken PyMuPDF state.
+            manager_dirty = True
         elapsed = time.monotonic() - t0
         pdf_log.debug("[%s] %.1fs detected=%s", stage.upper(), elapsed,
                       r.get("detected"))
@@ -1033,11 +1063,13 @@ def run_pipeline(args):
             _p(f"  county constraints build skipped: {_cc_exc}")
 
     # Graceful Docker shutdown: flush status before process is killed.
+    # Exit 130 (128 + SIGTERM=15) signals preemption to the parent wrapper
+    # (run_batch_job.py) so it does NOT mark the slice as successfully complete.
     import signal
     def _sigterm_handler(signum, frame):
-        _p("\n  SIGTERM received — flushing status and exiting...")
+        _p("\n  SIGTERM received — flushing status and exiting (preempted)...")
         status.force_save()
-        sys.exit(0)
+        sys.exit(130)
     signal.signal(signal.SIGTERM, _sigterm_handler)
 
     _run_start = time.monotonic()

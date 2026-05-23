@@ -286,16 +286,20 @@ def _load_secrets():
             json.dumps(gcp) if isinstance(gcp, dict) else str(gcp), encoding="utf-8"
         )
         os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(gcp_path)
-        log.info("GCP service account loaded → /tmp/gcp.json")
+        log.info("GCP service account loaded -> /tmp/gcp.json  (key_id=%s)",
+                 gcp.get("private_key_id", "?") if isinstance(gcp, dict) else "?")
     else:
         log.warning("No 'gcp_service_account' in secret '%s'", gcp_id)
 
     gemini_key = payload.get("gemini_api_key", "")
     if gemini_key and gemini_key not in ("", "REPLACE_ME"):
         os.environ["GOOGLE_API_KEY"] = gemini_key
-        log.info("Gemini API key loaded")
+        log.info("Gemini API key loaded (%d chars)", len(gemini_key))
     else:
-        log.warning("gemini_api_key missing/placeholder in '%s'", gcp_id)
+        # Empty gemini_api_key is intentional when using Application Default
+        # Credentials (ADC) via the GCP service account.  genai.configure()
+        # will pick up GOOGLE_APPLICATION_CREDENTIALS automatically.
+        log.info("gemini_api_key empty — Gemini will authenticate via ADC (SA key)")
 
     # ---- RDS ----
     rds_id = os.environ.get("RDS_CREDS_SECRET_ID", "osu-pipeline/rds")

@@ -47,12 +47,13 @@ COPY aws/run_batch_job.py /app/run_batch_job.py
 COPY unet_dot_detector.py /app/unet_dot_detector.py
 COPY unet_best.pth        /app/unet_best.pth
 
-# Runtime environment
+# Runtime environment — PYTHONPATH exposes project modules to /app/main.py
 ENV UNET_CHECKPOINT=/app/unet_best.pth \
     OUTPUT_ROOT=/tmp/output \
     SLICE_SIZE=500 \
     MAX_WORKERS=4 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app/project:/app
 
 # Set working directory
 WORKDIR /app
@@ -60,5 +61,18 @@ WORKDIR /app
 # Secrets injected at runtime (never baked in):
 #   INPUT_BUCKET, OUTPUT_BUCKET, INDEX_KEY
 #   GOOGLE_CREDS_SECRET_ID, RDS_CREDS_SECRET_ID
+
+# Smoke-test: verify all required files are present and importable
+RUN python -c "\
+import sys; sys.path.insert(0,'/app/project'); sys.path.insert(0,'/app');\
+import config, scan_dataset;\
+from utils.s3_reader import get_pdf_bytes_s3_flat;\
+from county.prompts import setup_gemini;\
+print('All imports OK');\
+import os; assert os.path.exists('/app/run_batch_job.py');\
+assert os.path.exists('/app/main.py');\
+assert os.path.exists('/app/project/config.py');\
+print('All files present');\
+"
 
 ENTRYPOINT ["python", "/app/run_batch_job.py"]

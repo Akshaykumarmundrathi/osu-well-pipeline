@@ -22,7 +22,7 @@ import boto3
 REGION         = "us-east-1"
 ACCOUNT_ID     = "225989338968"
 ECR_REPO       = f"{ACCOUNT_ID}.dkr.ecr.{REGION}.amazonaws.com/osu-pipeline"
-NEW_IMAGE_TAG  = "v9-threadfix"
+NEW_IMAGE_TAG  = "v10-sync"
 PROJECT_ROOT   = Path(__file__).parent.parent   # D:\project_modular
 SOURCE_BUCKET  = f"osu-pipeline-results"        # reuse existing bucket
 SOURCE_KEY     = "codebuild/source.zip"
@@ -302,6 +302,5 @@ if __name__ == "__main__":
     print(f"\nMonitor with:")
     print(f"  python aws/monitor_codebuild.py {build_id}")
     print(f"\nThe build will take ~15-20 minutes. Once complete:")
-    print(f"  1. Run: python aws/register_rev13.py  (update to use v6-fixed-2)")
-    print(f"  2. Cancel current job: aws batch cancel-job --job-id 25e21ea1... --reason 'switching to fixed image'")
-    print(f"  3. Re-submit: python aws/orchestrate_robust.py --slice-size 500 --workers 4")
+    print(f"  1. Register new job def: python aws/apply_new_image.py --dry-run")
+    print(f"  2. Apply:               python aws/apply_new_image.py")

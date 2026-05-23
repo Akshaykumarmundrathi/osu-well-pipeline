@@ -1,8 +1,8 @@
 """
-Run this AFTER CodeBuild completes v6-fixed-2:
-1. Register job def revision 13 (new image, same config)
-2. Clear failed S3 slice states so orchestrate_robust.py re-runs them
-3. Submit fresh 1139-task array job
+Run this AFTER CodeBuild completes a new image tag:
+1. Register new job def revision (new image, same config)
+2. Clear failed S3 slice states so they get re-run
+3. Submit fresh array job
 
 Usage:
     python aws/apply_new_image.py [--dry-run]
@@ -18,7 +18,7 @@ import boto3
 REGION        = "us-east-1"
 ACCOUNT_ID    = "225989338968"
 ECR_REPO      = f"{ACCOUNT_ID}.dkr.ecr.{REGION}.amazonaws.com/osu-pipeline"
-NEW_IMAGE_TAG = "v9-threadfix"
+NEW_IMAGE_TAG = "v10-sync"
 NEW_IMAGE     = f"{ECR_REPO}:{NEW_IMAGE_TAG}"
 JOB_DEF_NAME   = "osu-pipeline-job"
 INPUT_BUCKET   = "osu-well-records-225989338968"
@@ -138,7 +138,7 @@ def clear_failed_slice_states() -> int:
 
 def submit_array_job(job_def_arn: str, array_size: int) -> str:
     resp = batch.submit_job(
-        jobName="osu-pipeline-v9-threadfix",
+        jobName=f"osu-pipeline-{NEW_IMAGE_TAG}",
         jobQueue=JOB_QUEUE,
         jobDefinition=job_def_arn,
         arrayProperties={"size": array_size},
@@ -155,7 +155,7 @@ if __name__ == "__main__":
                         help=f"Records per slice (default {DEFAULT_SLICE})")
     args = parser.parse_args()
 
-    print("=== Applying v7-all-fixes image ===\n")
+    print(f"=== Applying {NEW_IMAGE_TAG} image ===\n")
 
     print("1. Verifying ECR image exists...")
     if not verify_image_exists():

@@ -15,6 +15,7 @@ Call force_save() at month/year boundaries and on process exit.
 """
 
 import csv
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -106,6 +107,10 @@ class ProcessingStatus:
         self.csv_path = csv_path
         self._rows: dict[str, dict] = {}
         self._pending = 0
+        # RLock so that force_save() → save() and _update() → _save_locked()
+        # can re-enter without deadlock, and concurrent workers don't corrupt
+        # the shared .tmp file.
+        self._lock = threading.RLock()
         self._load()
 
     # -- I/O ------------------------------------------------------------------
@@ -123,6 +128,16 @@ class ProcessingStatus:
     def save(self):
         """
         Rewrite the entire CSV from current in-memory rows.
+
+        Thread-safe: acquires _lock before writing so concurrent workers
+        can't both write to the same .tmp file and race on the rename.
+        """
+        with self._lock:
+            self._save_locked()
+
+    def _save_locked(self):
+        """
+        Write CSV to .tmp then rename — MUST be called with self._lock held.
 
         Writes to a sibling .tmp file first, then renames over the
         original — atomic on Windows/POSIX. Ctrl-C during the write
@@ -157,8 +172,9 @@ class ProcessingStatus:
 
     def force_save(self):
         """Flush pending updates to disk; call at boundaries and process exit."""
-        self.save()
-        self._pending = 0
+        with self._lock:
+            self._save_locked()
+            self._pending = 0
 
     # -- Record management ----------------------------------------------------
 
@@ -168,6 +184,16 @@ class ProcessingStatus:
                     collection_num: int = 0,
                     model_tier: str = "", decade: str = ""):
         """Create a PENDING row for `pdf_stem` if it doesn't already exist."""
+        with self._lock:
+            self._init_record_locked(pdf_stem, pdf_path, collection, year, month,
+                                     zip_path, internal_path, collection_num,
+                                     model_tier, decade)
+
+    def _init_record_locked(self, pdf_stem: str, pdf_path: str,
+                            collection: str, year: str, month: str,
+                            zip_path: str, internal_path: str,
+                            collection_num: int, model_tier: str, decade: str):
+        """Inner implementation — must be called with self._lock held."""
         if pdf_stem in self._rows:
             return
         row = dict(_EMPTY_ROW)
@@ -348,19 +374,24 @@ class ProcessingStatus:
         Write the stage's status + confidence + any stage-specific extras
         to the row, bump last_updated, and flush to disk every
         SAVE_INTERVAL changes.
-        """
-        if pdf_stem not in self._rows:
-            row = dict(_EMPTY_ROW)
-            row["pdf_stem"] = pdf_stem
-            self._rows[pdf_stem] = row
-        row = self._rows[pdf_stem]
-        row[f"{stage}_status"]     = status
-        row[f"{stage}_confidence"] = confidence
-        if extra:
-            row.update(extra)
-        row["last_updated"] = _now()
 
-        self._pending += 1
-        if self._pending >= SAVE_INTERVAL:
-            self.save()
-            self._pending = 0
+        Thread-safe: holds _lock for the entire in-memory mutation and the
+        conditional disk flush so concurrent workers don't interleave dict
+        writes or race on the .tmp rename.
+        """
+        with self._lock:
+            if pdf_stem not in self._rows:
+                row = dict(_EMPTY_ROW)
+                row["pdf_stem"] = pdf_stem
+                self._rows[pdf_stem] = row
+            row = self._rows[pdf_stem]
+            row[f"{stage}_status"]     = status
+            row[f"{stage}_confidence"] = confidence
+            if extra:
+                row.update(extra)
+            row["last_updated"] = _now()
+
+            self._pending += 1
+            if self._pending >= SAVE_INTERVAL:
+                self._save_locked()   # already holding _lock — RLock allows re-entry
+                self._pending = 0

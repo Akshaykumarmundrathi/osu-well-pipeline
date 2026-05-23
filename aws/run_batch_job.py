@@ -447,6 +447,14 @@ def _upload_results(output_root: Path, prune_images_after: bool = False) -> int:
             )
             n += 1
             if prune_images_after and path.suffix.lower() in _IMAGE_EXTS:
+                # Never prune *_grid.png files in periodic checkpoints.
+                # The dot stage runs after the grid stage and scans its output
+                # directory for this file.  Records take 20–40 min end-to-end,
+                # so the periodic checkpoint fires several times between grid
+                # finishing and dot starting — without this guard, the dot
+                # stage always fails with "grid_image_not_found".
+                if path.name.endswith("_grid.png"):
+                    continue
                 uploaded_images.append(path)
         except Exception as e:
             log.error("upload failed: %s  (%s)", path.name, e)
@@ -618,9 +626,10 @@ def _start_checkpoint_thread(output_root: Path, stop_event: threading.Event):
         while not stop_event.wait(timeout=CHECKPOINT_INTERVAL_S):
             if _terminating:
                 break
-            log.info("Periodic checkpoint upload (prune_images=True) ...")
+            log.info("Periodic checkpoint upload (prune_images=True, grid.png preserved) ...")
             try:
-                # Prune images after upload — keeps /tmp lean between checkpoints.
+                # Prune crop/page images after upload to keep /tmp lean.
+                # Grid PNGs are exempted — the dot stage needs them on local disk.
                 _upload_results(output_root, prune_images_after=True)
             except Exception:
                 log.warning("Periodic checkpoint error:\n%s", traceback.format_exc())

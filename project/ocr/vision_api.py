@@ -194,6 +194,20 @@ def detect_text_with_vision(
     if cache_key and cache_key in manager._ocr_cache:
         return manager._ocr_cache[cache_key]
 
+    # get_page_annotations (called by the grid stage) also OCRs each page and
+    # stores the result at the plain int key `page_num`.  If that entry exists,
+    # reuse it rather than running Tesseract again.  For noisy 1914 scans each
+    # Tesseract call takes 10–30 minutes, so skipping the duplicate call is the
+    # single biggest throughput lever.
+    if manager is not None and page_num is not None:
+        prior = manager._ocr_cache.get(page_num)
+        if isinstance(prior, tuple) and len(prior) == 2:   # (annotations, pil_image)
+            anns = prior[0]
+            if anns:                                        # non-empty → reuse
+                if cache_key:
+                    manager._ocr_cache[cache_key] = anns   # promote for future hits
+                return anns
+
     processed   = preprocess_image(pil_image).convert("RGB")
     annotations = _ocr_image(processed)
 
@@ -222,9 +236,18 @@ def get_page_annotations(
                 resolution_multiplier=resolution_multiplier,
             )
 
+        # Primary cache: int key (our own format).
         cached = manager._ocr_cache.get(page_num)
         if cached is not None:
             return cached
+
+        # Secondary: detect_text_with_vision may have already OCR'd this page
+        # (key format: (page_num, "pre")).  Reuse to avoid a second Tesseract run.
+        pre_cached = manager._ocr_cache.get((page_num, "pre"))
+        if pre_cached:
+            result = (pre_cached, None)           # no PIL available from that path
+            manager._ocr_cache[page_num] = result
+            return result
 
         pil_image = manager.get_page_pil(page_num)
         if pil_image is None:
@@ -232,7 +255,9 @@ def get_page_annotations(
 
         annotations = _ocr_image(pil_image)
         result      = (annotations or None), pil_image
-        manager._ocr_cache[page_num] = result
+        manager._ocr_cache[page_num]           = result
+        # Populate the detect_text_with_vision key so location stage gets a hit.
+        manager._ocr_cache[(page_num, "pre")]  = annotations or None
         return result
 
     except Exception as exc:

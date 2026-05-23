@@ -9,6 +9,15 @@ dist/
 build/
 .eggs/
 
+### Node / JS
+node_modules/
+package.json
+package-lock.json
+
+### Claude Code internal state
+.claude/worktrees/
+.claude/tasks/
+
 ### Credentials — NEVER commit these
 credentials/
 **/credentials/
@@ -16,9 +25,6 @@ credentials/
 *.key
 *.json
 !aws/config/*.json
-!visualizer/package*.json
-!package.json
-!package-lock.json
 # Explicit protection against service account keys
 *service*account*.json
 *gcp*.json
@@ -26,21 +32,29 @@ credentials/
 *aws*credentials*
 *aws*access*
 
-### Visualizer — generated files (too large for git, rebuilt on demand)
+### Visualizer — generated/stale output files
 visualizer/well_locations.json
 visualizer/well_locations.csv
 visualizer/well_map_standalone.html
 visualizer/viewer_url.txt
+visualizer/analysis/
+visualizer/s3_*.txt
+visualizer/s3_*.csv
+visualizer/s3_*.json
+visualizer/refresh_state.json
+visualizer/analysis_state.json
+
+### Environment
 .env
 .env.*
 !.env.example
 
-### Model weights (large binaries — keep out of git)
+### Model weights (large binaries)
 *.pth
 *.pt
 *.ckpt
 
-### U-Net detector source (lives at D:\well_dot_detector\ — copied here for Docker build only)
+### U-Net detector (lives at D:\well_dot_detector\ — copied for Docker only)
 unet_dot_detector.py
 
 ### Outputs / data
@@ -49,6 +63,7 @@ aws/results/
 aws/build/
 *.zip
 *.pdf
+*.lnk
 
 ### IDE
 .vscode/
@@ -59,6 +74,7 @@ aws/build/
 .DS_Store
 Thumbs.db
 
-### Logs
+### Logs and operational state
 *.log
 fastsync_*.log
+monitor_state.json

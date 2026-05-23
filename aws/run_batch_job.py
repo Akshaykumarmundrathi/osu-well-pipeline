@@ -539,10 +539,26 @@ def _analyze_results(output_root: Path) -> dict:
     error_types: dict[str, int] = {}
     total = failed_records = api_records = code_records = 0
 
+    # Read quota rotation events written by county/prompts.py during the run.
+    quota_events_path = output_root / "quota_events.json"
+    key_rotations = 0
+    if quota_events_path.exists():
+        try:
+            qe = json.loads(quota_events_path.read_text(encoding="utf-8"))
+            key_rotations = qe.get("key_rotation_count", 0)
+            if key_rotations:
+                log.warning(
+                    "Gemini key rotation occurred %d time(s) during this slice — "
+                    "consider adding more API keys to GOOGLE_API_KEY.",
+                    key_rotations,
+                )
+        except Exception:
+            pass
+
     if not status_csv.exists():
         log.warning("processing_status.csv not found — skipping result analysis")
         return {"total": 0, "verdict": "ok", "stage_counts": stage_counts,
-                "error_types": {}}
+                "error_types": {}, "key_rotations": key_rotations}
 
     try:
         with status_csv.open(encoding="utf-8", errors="replace", newline="") as f:
@@ -627,6 +643,7 @@ def _analyze_results(output_root: Path) -> dict:
         "verdict":            verdict,
         "stage_counts":       stage_counts,
         "error_types":        error_types,
+        "key_rotations":      key_rotations,
     }
 
 

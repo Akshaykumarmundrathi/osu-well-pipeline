@@ -1,22 +1,14 @@
 """
-S3-aware ZIP/PDF reader.
+S3 PDF reader — flat layout only.
 
-Mirrors `utils.zip_reader` but pulls bytes from S3 instead of the local
-filesystem. Used inside the AWS Batch container; safe to import locally
-since boto3 is only constructed lazily.
+PDFs are stored as standalone objects in S3 (no ZIP wrapper).
+The dataset_index.csv pdf_path column contains s3:// URIs.
 
-Usage:
-  - dataset_index.csv has rows whose `zip_path` looks like
-    "s3://bucket/key/path/to/file.zip" — the rest of the pipeline calls
-    `_make_manager(record)` in main.py which detects the prefix and
-    routes here.
-  - Each unique ZIP is fetched ONCE per process and held in an LRU cache
-    so PDFs read from the same ZIP don't re-download.
+Used inside the AWS Batch container; boto3 is constructed lazily so
+this module is safe to import locally without AWS credentials.
 """
 
-import io
-import zipfile
-from functools import lru_cache
+from pathlib import Path
 from urllib.parse import urlparse
 
 import boto3
@@ -33,79 +25,28 @@ def _client():
 
 
 def parse_s3_uri(uri: str) -> tuple[str, str]:
-    """
-    Split 's3://bucket/key/path' into ('bucket', 'key/path').
-    Raises ValueError on malformed input.
-    """
+    """Split 's3://bucket/key/path' into ('bucket', 'key/path')."""
     p = urlparse(uri)
     if p.scheme != "s3" or not p.netloc:
-        raise ValueError(f"not an s3:// URI: {uri}")
+        raise ValueError(f"not an s3:// URI: {uri!r}")
     return p.netloc, p.path.lstrip("/")
 
 
-@lru_cache(maxsize=64)
-def _open_zip_cached(bucket: str, key: str) -> zipfile.ZipFile:
-    """
-    Stream a ZIP from S3 into memory and return an open ZipFile.
-    LRU-cached so subsequent PDFs from the same archive are free.
-    """
-    obj  = _client().get_object(Bucket=bucket, Key=key)
-    data = obj["Body"].read()
-    return zipfile.ZipFile(io.BytesIO(data))
-
-
-def get_pdf_bytes_s3(zip_uri: str, internal_path: str) -> bytes:
-    """Extract one PDF (raw bytes) from a ZIP that lives in S3."""
-    bucket, key = parse_s3_uri(zip_uri)
-    zf = _open_zip_cached(bucket, key)
-    return zf.read(internal_path)
-
-
 def get_pdf_bytes_s3_flat(pdf_uri: str) -> bytes:
-    """Fetch a standalone PDF object from S3 (flat layout, no ZIP wrapper)."""
+    """Fetch a standalone PDF object from S3 and return its raw bytes."""
     bucket, key = parse_s3_uri(pdf_uri)
     obj = _client().get_object(Bucket=bucket, Key=key)
     return obj["Body"].read()
 
 
-def list_pdfs_in_s3_zip(zip_uri: str) -> list[dict]:
+def upload_directory(local_dir, bucket: str, key_prefix: str) -> int:
     """
-    Index every PDF inside a ZIP at zip_uri (an s3:// URI). Returns the
-    same shape `zip_reader.list_pdfs_in_zip` returns:
-      {internal_path, year, month, pdf_name, file_size}
+    Upload every file under local_dir to s3://bucket/<key_prefix>/relpath.
+    Returns the number of files uploaded.
     """
-    bucket, key = parse_s3_uri(zip_uri)
-    zf = _open_zip_cached(bucket, key)
-    entries = []
-    for info in zf.infolist():
-        if info.is_dir():
-            continue
-        name = info.filename.replace("\\", "/")
-        if not name.lower().endswith(".pdf"):
-            continue
-        parts = [p for p in name.split("/") if p]
-        pdf_name = parts[-1]
-        month    = parts[-2] if len(parts) >= 2 else ""
-        year     = parts[-3] if len(parts) >= 3 else ""
-        entries.append({
-            "internal_path": info.filename,
-            "year":          year,
-            "month":         month,
-            "pdf_name":      pdf_name,
-            "file_size":     info.file_size,
-        })
-    return entries
-
-
-def upload_directory(local_dir, bucket: str, key_prefix: str):
-    """
-    Upload every file under `local_dir` to s3://bucket/<key_prefix>/relpath.
-    Used by the Batch entrypoint to ship per-slice outputs back to S3.
-    """
-    from pathlib import Path
-    cli = _client()
+    cli  = _client()
     base = Path(local_dir)
-    n = 0
+    n    = 0
     for path in base.rglob("*"):
         if not path.is_file():
             continue

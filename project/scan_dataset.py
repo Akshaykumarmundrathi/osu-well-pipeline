@@ -1,16 +1,22 @@
 """
 Phase 1 — Dataset Scanner
 
-Scans D:\ for ExportedFolderContents (N).zip files (or a flat PDF folder).
-Each ZIP's internal structure: {year}/{month}/*.pdf
+Scans an ExportedFolderContents directory tree (or flat PDF folder) and
+builds dataset_index.csv.  PDFs are always flat — never inside a ZIP.
+
+Expected directory structure under source_root:
+    ExportedFolderContents (N)/
+        {year}/
+            {month}/
+                *.pdf
 
 CLI:
-    python scan_dataset.py                     # full ZIP scan from D:\
+    python scan_dataset.py                     # scan from D:\
     python scan_dataset.py --source D:\        # explicit source root
-    python scan_dataset.py --flat D:\pdfs      # flat folder (local testing)
+    python scan_dataset.py --flat D:\pdfs      # flat folder of PDFs
     python scan_dataset.py --dry-run           # scan without writing
     python scan_dataset.py --summary           # stats from existing index
-    python scan_dataset.py --validate          # verify ZIPs/files still exist
+    python scan_dataset.py --validate          # verify files still exist
 """
 
 import argparse
@@ -23,7 +29,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from config import DATASET_INDEX_CSV, OUTPUT_ROOT, SOURCE_ROOT
-from utils.zip_reader import _extract_collection_num, list_pdfs_in_zip
 
 
 # -- DatasetRecord -------------------------------------------------------------
@@ -97,48 +102,31 @@ class OutputPathBuilder:
 
 def scan_collection_root(source_root: Path) -> list[DatasetRecord]:
     """
-    Finds ExportedFolderContents (N).zip files directly under source_root,
-    then indexes every PDF inside each ZIP.
+    Find ExportedFolderContents (N) directories directly under source_root
+    and index every PDF inside them.  PDFs are flat — no ZIP reading.
+
+    Expected layout:
+        <source_root>/
+            ExportedFolderContents (1)/
+                1911/
+                    01 - January/
+                        *.pdf
+            ExportedFolderContents (2)/
+                ...
     """
     records: list[DatasetRecord] = []
     ts = _now()
-    zip_pattern = re.compile(r"ExportedFolderContents\s*\((\d+)\)", re.IGNORECASE)
+    dir_pattern = re.compile(r"ExportedFolderContents\s*\((\d+)\)", re.IGNORECASE)
 
     for entry in sorted(source_root.iterdir()):
-        # Accept both  "ExportedFolderContents (1).zip"  and  "ExportedFolderContents (1)"
-        stem_name = entry.stem if entry.suffix.lower() == ".zip" else entry.name
-        m = zip_pattern.match(stem_name)
+        if not entry.is_dir():
+            continue
+        m = dir_pattern.match(entry.name)
         if not m:
             continue
-
         num      = int(m.group(1))
         col_safe = f"ExportedFolderContents_{num}"
-
-        if entry.is_dir():
-            # Treat as an already-extracted folder
-            records.extend(_scan_extracted_folder(entry, entry.name, num, col_safe, ts))
-        elif entry.suffix.lower() == ".zip":
-            try:
-                entries = list_pdfs_in_zip(entry)
-            except RuntimeError as exc:
-                print(f"WARNING: {exc}")
-                continue
-
-            for e in entries:
-                records.append(DatasetRecord(
-                    pdf_stem        = Path(e["pdf_name"]).stem,
-                    pdf_path        = f"{entry}::{e['internal_path']}",
-                    collection      = entry.name,
-                    collection_num  = num,
-                    year            = e["year"],
-                    month           = e["month"],
-                    collection_safe = col_safe,
-                    month_safe      = _safe(e["month"]),
-                    file_size_bytes = e["file_size"],
-                    scan_timestamp  = ts,
-                    zip_path        = str(entry),
-                    internal_path   = e["internal_path"],
-                ))
+        records.extend(_scan_extracted_folder(entry, entry.name, num, col_safe, ts))
 
     return records
 
@@ -171,7 +159,10 @@ def _scan_extracted_folder(
 
 
 def scan_flat_folder(folder: Path) -> list[DatasetRecord]:
-    """Flat folder of PDFs — for local testing."""
+    """
+    Recursively find all PDFs under folder.  Used for local testing or any
+    directory that doesn't follow the ExportedFolderContents (N) naming.
+    """
     ts = _now()
     return [
         DatasetRecord(
@@ -182,7 +173,7 @@ def scan_flat_folder(folder: Path) -> list[DatasetRecord]:
             file_size_bytes = pdf.stat().st_size,
             scan_timestamp  = ts,
         )
-        for pdf in sorted(folder.glob("*.pdf"))
+        for pdf in sorted(folder.rglob("*.pdf"))
     ]
 
 

@@ -50,7 +50,6 @@ from scan_dataset import DatasetRecord, OutputPathBuilder, load_index, scan_flat
 from utils.insights import InsightsCollector
 from utils.logging_utils import get_logger, get_pdf_logger
 from utils.processing_status import DONE, FAILED, SKIPPED, ProcessingStatus
-from utils.zip_reader import get_pdf_bytes
 
 log = get_logger(__name__)
 
@@ -261,24 +260,12 @@ def _well_name_from_stem(pdf_stem: str) -> str:
 
 def _make_manager(record: DatasetRecord) -> PDFDocumentManager:
     """
-    Build a PDFDocumentManager for the record's source.
+    Build a PDFDocumentManager for the record's source PDF.
 
-    Routes the lookup based on `record.zip_path`:
-      - 's3://bucket/key' -> stream the ZIP from S3, extract the PDF
-      - any other non-empty path -> local ZIP file
-      - empty -> read the standalone PDF at `record.pdf_path`
+    PDFs are always flat — never inside a ZIP.
+      - pdf_path starts with 's3://' → stream bytes from S3
+      - otherwise                    → open local file path directly
     """
-    zp = record.zip_path or ""
-    if zp.startswith("s3://"):
-        from utils.s3_reader import get_pdf_bytes_s3
-        pdf_bytes = get_pdf_bytes_s3(zp, record.internal_path)
-        return PDFDocumentManager(pdf_bytes=pdf_bytes,
-                                  resolution_multiplier=RESOLUTION_MULTIPLIER)
-    if zp:
-        pdf_bytes = get_pdf_bytes(zp, record.internal_path)
-        return PDFDocumentManager(pdf_bytes=pdf_bytes,
-                                  resolution_multiplier=RESOLUTION_MULTIPLIER)
-    # Flat S3 layout: no ZIP wrapper, direct s3:// PDF URI
     pp = record.pdf_path or ""
     if pp.startswith("s3://"):
         from utils.s3_reader import get_pdf_bytes_s3_flat

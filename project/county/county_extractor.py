@@ -84,9 +84,18 @@ def _get_gemini():
 
 
 def _gemini_call(model, cfg, prompt: str, pil_image) -> str:
-    """Send (prompt, image) to Gemini with rate-limiting and return the stripped text reply."""
+    """Send (prompt, image) to Gemini with rate-limiting and return the stripped text reply.
+
+    Accessing resp.text raises ValueError when Gemini blocks the response for
+    safety reasons — treat that as a clean "not detected" rather than an exception
+    so county records don't get classified as error:exception.
+    """
     resp = _rate_limited_generate(model, prompt, pil_image, cfg)
-    return resp.text.strip() if resp.text else ""
+    try:
+        text = resp.text
+        return text.strip() if text else ""
+    except ValueError:
+        return "Not detected."  # safety-blocked — treat as no match
 
 
 # -- Structural anchor (zero-cost county detection) ----------------------------

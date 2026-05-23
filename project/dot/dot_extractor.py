@@ -182,8 +182,17 @@ def process_single_dot(
         logger.debug("Dot inference: tier=%s threshold=%.2f detected=%d",
                      tier, threshold, len(dots))
     except Exception as exc:
+        exc_str = str(exc)
+        # Separate visualisation failures (non-fatal) from real inference failures.
+        # matplotlib _save_overlay can raise on degenerate images (0-dimension axis,
+        # single-pixel crops, all-black tiles) — the model result is still valid
+        # in these cases, we just lose the overlay PNG.
+        if "imshow" in exc_str.lower() or "axes" in exc_str.lower() or "figure" in exc_str.lower():
+            logger.warning("Dot overlay render failed (non-fatal) on %s: %s — "
+                           "treating as no_dot_found", grid_path.name, exc_str)
+            return {"detected": False, "error": "no_dot_found"}
         logger.error("Dot inference failed on %s: %s", grid_path.name, exc)
-        return {"detected": False, "error": str(exc)}
+        return {"detected": False, "error": exc_str}
 
     if not dots:
         return {"detected": False, "error": "no_dot_found"}

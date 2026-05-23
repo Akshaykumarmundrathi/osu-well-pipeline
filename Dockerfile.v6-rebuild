@@ -1,8 +1,8 @@
 # Build from Python slim base — includes pip + essential tools
 FROM python:3.10-slim as builder
 
-LABEL org.opencontainers.image.title="osu-well-pipeline-v6" \
-      org.opencontainers.image.description="Oklahoma well-record PDF processing pipeline (reduced slice size)"
+LABEL org.opencontainers.image.title="osu-well-pipeline-v12" \
+      org.opencontainers.image.description="Oklahoma well-record PDF processing pipeline — county/dot exception fixes, pinned PyTorch 2.3"
 
 WORKDIR /app
 
@@ -36,9 +36,10 @@ RUN pip install --no-cache-dir \
     scipy>=1.11 \
     pytesseract>=0.3.10
 
-# PyTorch (CPU-only) — lightweight for inference
+# PyTorch (CPU-only) — pin version for reproducible builds
+# torch 2.3.x supports weights_only=True in torch.load() and fp16 inference
 RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu \
-    torch torchvision torchaudio
+    torch==2.3.1 torchvision==0.18.1
 
 # Project source — code layer (rebuilds quickly if code changes)
 COPY project              /app/project

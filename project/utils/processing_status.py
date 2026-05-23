@@ -84,13 +84,25 @@ def _classify_error(error: str) -> str:
     if not error:
         return "unknown"
     e = error.lower()
-    if "503" in e or "unavailable" in e or "socket" in e or "handshaker" in e:
+    # API / network errors (Vision API + Gemini)
+    if any(x in e for x in (
+        "503", "unavailable", "socket", "handshaker",
+        "deadline", "timeout", "permission", "unauthenticated",
+        "credentials", "api_error", "quota", "resource_exhausted",
+        "429", "401", "403",
+    )):
         return "api_error"
+    # Dot-specific
+    if "model_load_failed" in e or "unet" in e or "checkpoint" in e:
+        return "model_load_failed"
+    if "grid_image_not_found" in e:
+        return "grid_image_not_found"
+    # Named sentinel strings returned directly as error values
     if "keyword_not_found" in e:
         return "keyword_not_found"
     if "no_match" in e:
         return "no_match"
-    if "not_detected" in e or "no grid" in e:
+    if "not_detected" in e or "no grid" in e or "no_dot_found" in e:
         return "not_detected"
     if "not_found" in e:
         return "not_found"

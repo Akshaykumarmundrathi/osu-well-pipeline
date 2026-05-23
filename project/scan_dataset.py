@@ -52,8 +52,11 @@ class DatasetRecord:
 # -- Path helpers --------------------------------------------------------------
 
 def _safe(s: str) -> str:
-    """Filesystem-safe slug: collapse non-word chars to '_' and strip ends."""
-    return re.sub(r"[^\w]", "_", s).strip("_")
+    """Filesystem-safe slug: collapse non-word chars to '_' and strip ends.
+
+    Example: '01 - January' → '01_January'  (consecutive underscores merged).
+    """
+    return re.sub(r"_+", "_", re.sub(r"[^\w]", "_", s)).strip("_")
 
 
 def _now() -> str:

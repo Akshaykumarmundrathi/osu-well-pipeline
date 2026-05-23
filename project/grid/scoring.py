@@ -25,6 +25,8 @@ the back page of well-record sheets) and FORWARD for `relaxed=True`
 """
 
 import logging
+import os
+import signal
 from pathlib import Path
 
 import cv2
@@ -56,6 +58,19 @@ _METHODS = [
 ]
 
 _AR_MIN, _AR_MAX = 0.85, 1.15   # square-ish aspect ratio
+
+# Per-page wall-clock timeout.  Tesseract on noisy 1900s handwriting can spin
+# for many minutes; SIGALRM gives us a hard ceiling.  No-op on Windows.
+_PAGE_TIMEOUT_S = int(os.environ.get("GRID_PAGE_TIMEOUT_S", "45"))
+_HAS_SIGALRM    = hasattr(signal, "SIGALRM")
+
+
+class _GridPageTimeout(Exception):
+    """Raised by the SIGALRM handler when a page takes too long."""
+
+
+def _sigalrm_handler(signum, frame):
+    raise _GridPageTimeout(f"grid page timed out after {_PAGE_TIMEOUT_S}s")
 
 
 def _extract_best_candidate(cv_image, w_min, w_max, h_min, h_max):
@@ -177,16 +192,30 @@ def process_single_grid(
     try:
         pages = list(manager.iter_cv2_pages())
         for page_num, cv_img in page_order(pages):
-            # Strategy 1: structural anchor + crop.
-            grid_img, bbox, method = _try_anchor_on_page(
-                manager, page_num, cv_img, w_min, w_max, h_min, h_max, log,
-            )
-
-            # Strategy 2: full-page CV scan (fallback).
-            if grid_img is None:
-                grid_img, bbox, method = _extract_best_candidate(
-                    cv_img, w_min, w_max, h_min, h_max,
+            # Arm per-page timeout (Linux only; no-op on Windows).
+            if _HAS_SIGALRM:
+                _old_handler = signal.signal(signal.SIGALRM, _sigalrm_handler)
+                signal.alarm(_PAGE_TIMEOUT_S)
+            try:
+                # Strategy 1: structural anchor + crop.
+                grid_img, bbox, method = _try_anchor_on_page(
+                    manager, page_num, cv_img, w_min, w_max, h_min, h_max, log,
                 )
+
+                # Strategy 2: full-page CV scan (fallback).
+                if grid_img is None:
+                    grid_img, bbox, method = _extract_best_candidate(
+                        cv_img, w_min, w_max, h_min, h_max,
+                    )
+            except _GridPageTimeout:
+                log.warning("Grid page %d timed out after %ds — skipping",
+                            page_num, _PAGE_TIMEOUT_S)
+                grid_img = None
+            finally:
+                if _HAS_SIGALRM:
+                    signal.alarm(0)
+                    signal.signal(signal.SIGALRM, _old_handler)
+
             if grid_img is None:
                 log.debug("Page %d -- no grid (%s)", page_num, mode)
                 continue

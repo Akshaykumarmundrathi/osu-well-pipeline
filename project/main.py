@@ -278,8 +278,36 @@ def _make_manager(record: DatasetRecord) -> PDFDocumentManager:
 
 # -- CSV writers ---------------------------------------------------------------
 
+def _relativize_paths(obj, output_root: Path):
+    """
+    Walk a result dict and convert any absolute file-system paths that live
+    under output_root into portable POSIX-relative strings.
+
+    Motivation: grid/dot stages store image_path as '/tmp/output/grids/…'
+    which is an ephemeral container path useless after the task exits.
+    Storing the path relative to output_root lets the map site reconstruct
+    the S3 URI as: s3://bucket/slice-prefix/<relative_path>.
+    """
+    root_str = str(output_root)
+    if isinstance(obj, dict):
+        return {k: _relativize_paths(v, output_root) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_relativize_paths(v, output_root) for v in obj]
+    if isinstance(obj, str) and obj.startswith(root_str):
+        try:
+            return Path(obj).relative_to(output_root).as_posix()
+        except ValueError:
+            return obj
+    return obj
+
+
 def write_metadata(record: DatasetRecord, results: dict, paths: OutputPathBuilder):
-    """Write per-record metadata.json with source info + raw stage outputs."""
+    """
+    Write per-record metadata.json with source info + raw stage outputs.
+
+    Image paths are stored relative to output_root (not absolute container
+    paths) so the map site can build S3 URIs portably after upload.
+    """
     meta_path = paths.metadata_path(record)
     meta_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -292,8 +320,9 @@ def write_metadata(record: DatasetRecord, results: dict, paths: OutputPathBuilde
             "file_size_bytes": record.file_size_bytes,
             "scan_timestamp":  record.scan_timestamp,
         },
-        "processed_at": _now(),
-        "stages":       results,
+        "processed_at":  _now(),
+        "output_root":   str(paths.root),  # document root for S3 URI construction
+        "stages":        _relativize_paths(results, paths.root),
     }
     with meta_path.open("w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2, default=str)
@@ -309,6 +338,45 @@ def _append_failed(record: DatasetRecord, stage: str, error: str):
         if not exists:
             w.writerow(["pdf_stem", "pdf_path", "stage", "error", "timestamp"])
         w.writerow([record.pdf_stem, record.pdf_path, stage, error, _now()])
+
+
+_REVIEW_QUEUE_FIELDS = [
+    "pdf_stem", "pdf_path", "collection", "year", "month",
+    "stage", "confidence", "image_path", "reason", "timestamp",
+]
+
+
+def _append_review_queue(output_root: Path, record: DatasetRecord,
+                         stage: str, confidence: int,
+                         image_path: str, reason: str):
+    """
+    Append a low-confidence record to manual_review/review_queue.csv.
+
+    The map site / operator downloads this CSV, inspects each image at
+    `image_path` (relative to output_root, or the S3 URI after upload),
+    and either approves or corrects the detection before the next run.
+    """
+    from config import MANUAL_REVIEW_DIR
+    review_csv = MANUAL_REVIEW_DIR / "review_queue.csv"
+    review_csv.parent.mkdir(parents=True, exist_ok=True)
+    exists = review_csv.exists()
+    with review_csv.open("a", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=_REVIEW_QUEUE_FIELDS,
+                           extrasaction="ignore")
+        if not exists:
+            w.writeheader()
+        w.writerow({
+            "pdf_stem":   record.pdf_stem,
+            "pdf_path":   record.pdf_path,
+            "collection": record.collection,
+            "year":       record.year,
+            "month":      record.month,
+            "stage":      stage,
+            "confidence": confidence,
+            "image_path": image_path,
+            "reason":     reason,
+            "timestamp":  _now(),
+        })
 
 
 def _int_or_zero(v) -> int:
@@ -728,6 +796,58 @@ def _process_record_worker(arg):
         lines.append(f"  {label:<{_COL}}{_format_stage_result(stage, r, elapsed)}")
         results[stage] = r
 
+        # ---- Post-stage side-effects ----------------------------------------
+
+        if isinstance(r, dict) and r.get("detected"):
+            conf       = int(r.get("confidence", 0))
+            img_path   = r.get("image_path", "")
+            rel_img    = ""
+            if img_path:
+                try:
+                    rel_img = Path(img_path).relative_to(Path(output_root_str)).as_posix()
+                except ValueError:
+                    rel_img = img_path
+
+            # Flag low-confidence grid for manual review.
+            if stage == STAGE_GRID:
+                from config import GRID_REVIEW_BELOW
+                if conf < GRID_REVIEW_BELOW:
+                    reason = f"grid_conf={conf}<{GRID_REVIEW_BELOW}"
+                    pdf_log.info("Low-confidence grid (%d%%) → review queue", conf)
+                    try:
+                        _append_review_queue(
+                            Path(output_root_str), record,
+                            "grid", conf, rel_img, reason,
+                        )
+                    except Exception as _rq_exc:
+                        pdf_log.debug("review_queue write failed: %s", _rq_exc)
+
+            # Flag low-confidence dot for manual review; then delete grid PNG.
+            if stage == STAGE_DOT:
+                from config import DOT_REVIEW_BELOW
+                if conf < DOT_REVIEW_BELOW:
+                    reason = f"dot_conf={conf}<{DOT_REVIEW_BELOW}"
+                    pdf_log.info("Low-confidence dot (%d%%) → review queue", conf)
+                    try:
+                        _append_review_queue(
+                            Path(output_root_str), record,
+                            "dot", conf, rel_img, reason,
+                        )
+                    except Exception as _rq_exc:
+                        pdf_log.debug("review_queue write failed: %s", _rq_exc)
+
+        # After dot stage (detected or not), the grid PNG is no longer needed
+        # locally — it has been uploaded to S3 by the checkpoint thread.
+        # Delete it now to reclaim disk space immediately.
+        if stage == STAGE_DOT:
+            grid_dir = paths.grids_dir(record)
+            for _gp in grid_dir.glob(f"{record.pdf_stem}_page_*_grid.png"):
+                try:
+                    _gp.unlink(missing_ok=True)
+                    pdf_log.debug("Deleted grid PNG after dot stage: %s", _gp.name)
+                except Exception:
+                    pass
+
     lines.append(_record_status_text(results, stages))
 
     # Write per-record metadata.json from real (non-skipped, non-was_done) results.
@@ -1055,7 +1175,12 @@ def run_pipeline(args):
     import signal
     def _sigterm_handler(signum, frame):
         _p("\n  SIGTERM received — flushing status and exiting (preempted)...")
-        status.force_save()
+        # Wrap force_save in try/except: the .tmp rename can fail if OUTPUT_ROOT
+        # isn't yet writable (e.g. SIGTERM arrives before the first status write).
+        try:
+            status.force_save()
+        except Exception as _se:
+            _p(f"  force_save error during SIGTERM (non-fatal): {_se}")
         sys.exit(130)
     signal.signal(signal.SIGTERM, _sigterm_handler)
 

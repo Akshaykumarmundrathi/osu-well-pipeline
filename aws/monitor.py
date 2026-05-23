@@ -33,7 +33,7 @@ REGION         = "us-east-1"
 OUTPUT_BUCKET  = "osu-pipeline-results"
 PROGRESS_KEY   = "state/progress_map.json"
 JOB_QUEUE      = "osu-pipeline-queue"
-LOG_GROUP      = "/aws/batch/job"
+LOG_GROUP      = "/aws/batch/osu-pipeline"
 
 # ANSI colours (disabled when not a TTY)
 _IS_TTY = sys.stdout.isatty()
@@ -191,7 +191,11 @@ def _bar(done: int, total: int, width: int = 30) -> str:
     if total == 0:
         return "[" + " " * width + "]"
     filled = int(width * done / total)
-    bar = "█" * filled + "░" * (width - filled)
+    # Use ASCII fallback on Windows consoles that can't render block characters.
+    _enc = (sys.stdout.encoding or "").lower()
+    fill_char  = "█" if "utf" in _enc else "#"
+    empty_char = "░" if "utf" in _enc else "."
+    bar = fill_char * filled + empty_char * (width - filled)
     return f"[{bar}]"
 
 

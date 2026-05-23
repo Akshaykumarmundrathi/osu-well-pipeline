@@ -1,6 +1,14 @@
 """
-Submit a diagnostic Batch job that prints container filesystem info
-without running run_batch_job.py's main logic. Used to debug PYTHONPATH.
+DEBUG TOOL — not part of the production pipeline flow.
+
+Submit a one-off Batch job that prints container filesystem diagnostics
+(PYTHONPATH, sys.path, ls /app, ls /app/project) without running the full
+pipeline. Useful for verifying a new Docker image before submitting a full
+array job.
+
+Usage:
+    python aws/diagnose_container.py
+    # Then read CloudWatch logs: /aws/batch/osu-pipeline  prefix: diag/
 """
 import boto3
 

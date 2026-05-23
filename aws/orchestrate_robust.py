@@ -44,7 +44,7 @@ OUTPUT_BUCKET = "osu-pipeline-results"
 INDEX_KEY     = "index/dataset_index.csv"
 JOB_QUEUE     = "osu-pipeline-queue"
 JOB_DEF_NAME  = "osu-pipeline-job"
-ECR_IMAGE     = f"{ACCOUNT_ID}.dkr.ecr.{REGION}.amazonaws.com/osu-pipeline:v6-fixed"
+ECR_IMAGE     = f"{ACCOUNT_ID}.dkr.ecr.{REGION}.amazonaws.com/osu-pipeline:v6-fixed-2"
 EXEC_ROLE_ARN = f"arn:aws:iam::{ACCOUNT_ID}:role/osu-batch-execution-role"
 TASK_ROLE_ARN = f"arn:aws:iam::{ACCOUNT_ID}:role/osu-batch-task-role"
 LOG_GROUP     = "/aws/batch/osu-pipeline"
@@ -222,6 +222,24 @@ def _read_slice_states(n_slices: int) -> dict[int, str]:
 
 
 # ---------------------------------------------------------------------------
+# ECR image verification
+# ---------------------------------------------------------------------------
+def _verify_ecr_image(image: str = ECR_IMAGE) -> bool:
+    """Confirm the ECR image exists before attempting to use it. Fail fast."""
+    try:
+        repo_and_tag = image.split(".amazonaws.com/", 1)[-1]   # osu-pipeline:v6-fixed-2
+        repo, tag    = repo_and_tag.rsplit(":", 1)
+        ecr = boto3.client("ecr", region_name=REGION, config=_CFG)
+        ecr.describe_images(repositoryName=repo, imageIds=[{"imageTag": tag}])
+        log.info("ECR image verified: %s", image)
+        return True
+    except Exception as exc:
+        log.error("ECR image NOT FOUND (%s): %s", image, exc)
+        log.error("Build it with: python aws/setup_codebuild.py")
+        return False
+
+
+# ---------------------------------------------------------------------------
 # Job definition management
 # ---------------------------------------------------------------------------
 def _get_active_job_def() -> dict:
@@ -252,6 +270,8 @@ def _has_public_ip(job_def: dict) -> bool:
 
 def _register_fixed_job_def(slice_size: int, workers: int) -> str:
     """Register a new revision with all fixes applied. Returns job def ARN."""
+    if not _verify_ecr_image():
+        raise RuntimeError(f"Cannot register job def: ECR image {ECR_IMAGE} not found")
     log.info("Registering new job definition revision with networking fix ...")
     resp = _retry(
         lambda: batch().register_job_definition(

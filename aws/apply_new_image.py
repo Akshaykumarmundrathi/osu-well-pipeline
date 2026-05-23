@@ -10,8 +10,8 @@ Usage:
 
 import argparse
 import json
+import math
 import sys
-import time
 
 import boto3
 
@@ -20,10 +20,12 @@ ACCOUNT_ID    = "225989338968"
 ECR_REPO      = f"{ACCOUNT_ID}.dkr.ecr.{REGION}.amazonaws.com/osu-pipeline"
 NEW_IMAGE_TAG = "v6-fixed-2"
 NEW_IMAGE     = f"{ECR_REPO}:{NEW_IMAGE_TAG}"
-JOB_DEF_NAME  = "osu-pipeline-job"
-SOURCE_REV    = 12
-JOB_QUEUE     = "osu-pipeline-queue"
-OUTPUT_BUCKET = "osu-pipeline-results"
+JOB_DEF_NAME   = "osu-pipeline-job"
+INPUT_BUCKET   = "osu-well-records-225989338968"
+INDEX_KEY      = "index/dataset_index.csv"
+JOB_QUEUE      = "osu-pipeline-queue"
+OUTPUT_BUCKET  = "osu-pipeline-results"
+DEFAULT_SLICE  = 500
 
 batch = boto3.client("batch", region_name=REGION)
 s3    = boto3.client("s3",    region_name=REGION)
@@ -43,13 +45,17 @@ def verify_image_exists() -> bool:
         return False
 
 
-def register_rev13() -> str:
-    # Get rev 12 as base
+def register_new_revision() -> str:
+    """Register a new job def revision based on the current highest active revision."""
     jds = batch.describe_job_definitions(
         jobDefinitionName=JOB_DEF_NAME,
         status="ACTIVE",
     )["jobDefinitions"]
-    base = next(j for j in jds if j["revision"] == SOURCE_REV)
+    if not jds:
+        raise RuntimeError(f"No active job definitions found for {JOB_DEF_NAME}")
+    # Always derive from the latest active revision — no hardcoded source rev.
+    base = max(jds, key=lambda j: j["revision"])
+    print(f"  Basing on {JOB_DEF_NAME}:{base['revision']} (latest active revision)")
     cp   = dict(base["containerProperties"])
 
     # Swap image only
@@ -70,6 +76,23 @@ def register_rev13() -> str:
     rev = result["revision"]
     print(f"  Registered {JOB_DEF_NAME}:{rev}  image={NEW_IMAGE}")
     return arn
+
+
+def _count_index_rows(slice_size: int = DEFAULT_SLICE) -> int:
+    """Count rows in the S3 index to compute the correct array job size."""
+    print(f"  Counting rows in s3://{INPUT_BUCKET}/{INDEX_KEY} ...")
+    obj = s3.get_object(Bucket=INPUT_BUCKET, Key=INDEX_KEY)
+    n = 0
+    first = True
+    for line in obj["Body"].iter_lines():
+        if first:
+            first = False
+            continue
+        if line:
+            n += 1
+    size = max(2, math.ceil(n / slice_size))
+    print(f"  Index rows: {n}  slice_size: {slice_size}  array_size: {size}")
+    return size
 
 
 def clear_failed_slice_states() -> int:
@@ -107,21 +130,23 @@ def clear_failed_slice_states() -> int:
     return deleted
 
 
-def submit_array_job(job_def_arn: str) -> str:
+def submit_array_job(job_def_arn: str, array_size: int) -> str:
     resp = batch.submit_job(
         jobName="osu-pipeline-v6fixed2",
         jobQueue=JOB_QUEUE,
         jobDefinition=job_def_arn,
-        arrayProperties={"size": 1139},
+        arrayProperties={"size": array_size},
     )
     job_id = resp["jobId"]
-    print(f"  Submitted array job: {job_id}")
+    print(f"  Submitted array job ({array_size} tasks): {job_id}")
     return job_id
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dry-run", action="store_true", help="Print plan but don't execute")
+    parser.add_argument("--dry-run",    action="store_true", help="Print plan but don't execute")
+    parser.add_argument("--slice-size", type=int, default=DEFAULT_SLICE,
+                        help=f"Records per slice (default {DEFAULT_SLICE})")
     args = parser.parse_args()
 
     print("=== Applying v6-fixed-2 image ===\n")
@@ -135,14 +160,17 @@ if __name__ == "__main__":
         print("\n[DRY RUN] Would register job def and submit array job")
         sys.exit(0)
 
-    print("\n2. Registering job def revision 13 (new image)...")
-    jd_arn = register_rev13()
+    print("\n2. Registering new job def revision (new image)...")
+    jd_arn = register_new_revision()
 
     print("\n3. Clearing old failed slice states from S3...")
     clear_failed_slice_states()
 
-    print("\n4. Submitting fresh 1139-task array job...")
-    job_id = submit_array_job(jd_arn)
+    print("\n4. Computing array job size from index...")
+    array_size = _count_index_rows(args.slice_size)
+
+    print(f"\n5. Submitting fresh {array_size}-task array job...")
+    job_id = submit_array_job(jd_arn, array_size)
 
     print(f"\n=== Done! Job: {job_id} ===")
-    print(f"Monitor with: python aws/monitor.py --job-id {job_id} --interval 60")
+    print(f"Monitor with: python aws/monitor.py --job-ids {job_id} --interval 60")

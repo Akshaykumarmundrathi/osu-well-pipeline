@@ -122,16 +122,6 @@ EXCLUDE_DIRS  = {"__pycache__", ".git", ".claude", ".pytest_cache",
                  "pdfs", "tests", "well_dot_detector", "credentials"}
 EXCLUDE_EXTS  = {".pyc", ".pyo", ".zip", ".pdb"}
 EXCLUDE_FILES = {".env", ".env.local", "smiling-breaker-423712-h3-aff7ac746ad4.json"}
-# Files needed for the Docker build
-INCLUDE_PATTERNS = [
-    "Dockerfile.v6-rebuild",
-    ".dockerignore",
-    "requirements.txt",
-    "unet_dot_detector.py",
-    "unet_best.pth",
-    "project/**",
-    "aws/run_batch_job.py",
-]
 
 
 def _should_include(rel: Path) -> bool:
@@ -235,10 +225,9 @@ BUILDSPEC = {
 
 
 def ensure_codebuild_project(role_arn: str) -> None:
-    try:
-        cb.batch_get_projects(names=[PROJECT_NAME])["projects"]
-        print(f"  CodeBuild project exists: {PROJECT_NAME}")
-        # Update source
+    projects = cb.batch_get_projects(names=[PROJECT_NAME]).get("projects", [])
+    if projects:
+        print(f"  CodeBuild project exists: {PROJECT_NAME} — updating source")
         cb.update_project(
             name=PROJECT_NAME,
             source={
@@ -248,8 +237,6 @@ def ensure_codebuild_project(role_arn: str) -> None:
             },
         )
         return
-    except Exception:
-        pass
 
     resp = cb.create_project(
         name=PROJECT_NAME,
@@ -283,7 +270,6 @@ def ensure_codebuild_project(role_arn: str) -> None:
 def start_build() -> str:
     resp = cb.start_build(projectName=PROJECT_NAME)
     build_id = resp["build"]["id"]
-    build_arn = resp["build"]["arn"]
     print(f"  Build started: {build_id}")
     console_url = (
         f"https://{REGION}.console.aws.amazon.com/codesuite/codebuild/"

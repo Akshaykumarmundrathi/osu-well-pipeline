@@ -1,12 +1,23 @@
 """
-Register job definition revision 13: shell-wrapper entrypoint that
-hard-codes PYTHONPATH=/app/project:/app before starting run_batch_job.py.
+SUPERSEDED — DO NOT RUN.
 
-Why: PYTHONPATH in the Batch job definition environment IS present in
-os.environ of run_batch_job.py, but the subprocess call to main.py still
-fails with ModuleNotFoundError. Using a shell wrapper guarantees the path
-is set before Python starts either process.
+This script attempted to register a shell-wrapper entrypoint to hard-code
+PYTHONPATH before starting run_batch_job.py.  It does not work because AWS
+Batch Fargate containerProperties does NOT support the "entryPoint" field
+(it is rejected with: "Unknown parameter in containerProperties: entryPoint").
+
+The correct fix — baking PYTHONPATH into the Docker image ENV — was implemented
+in Dockerfile.v6-rebuild and the v6-fixed-2 ECR image.
+
+For new job definitions use: python aws/apply_new_image.py
 """
+
+import sys
+print("ERROR: This script is superseded. Use aws/apply_new_image.py instead.")
+sys.exit(1)
+
+# --- Original (broken) code preserved for reference only ---
+
 
 import json
 import boto3

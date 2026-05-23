@@ -382,7 +382,16 @@ def _run_pipeline(index_csv: Path, output_root: Path) -> int:
         "--workers", str(WORKERS),
     ]
     log.info("EXEC: %s", " ".join(cmd))
-    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"}
+    env = {
+        **os.environ,
+        # Belt-and-suspenders: explicitly set PYTHONPATH even though it is
+        # already baked into the Docker image ENV.  This ensures subprocesses
+        # spawned by main.py (e.g. tesseract wrappers) also inherit the path.
+        "PYTHONPATH":        "/app/project:/app",
+        "PYTHONUTF8":        "1",
+        "PYTHONIOENCODING":  "utf-8",
+        "PYTHONUNBUFFERED":  "1",
+    }
 
     with _proc_lock:
         _pipeline_proc = subprocess.Popen(cmd, env=env)
@@ -486,8 +495,27 @@ def _start_checkpoint_thread(output_root: Path, stop_event: threading.Event):
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-def main():
+def _preflight_check():
+    """Verify project modules are importable before launching the pipeline subprocess."""
+    import importlib
+    sys.path.insert(0, "/app/project")
     sys.path.insert(0, "/app")
+    for mod in ("config", "scan_dataset"):
+        try:
+            importlib.import_module(mod)
+        except ModuleNotFoundError as exc:
+            log.critical(
+                "PRE-FLIGHT FAILED: cannot import '%s' — PYTHONPATH=%s  sys.path=%s  error=%s",
+                mod, os.environ.get("PYTHONPATH", "<not set>"), sys.path[:6], exc,
+            )
+            sys.exit(1)
+    log.info("Pre-flight OK: config and scan_dataset importable")
+
+
+def main():
+    sys.path.insert(0, "/app/project")
+    sys.path.insert(0, "/app")
+    _preflight_check()
     start_time      = time.time()
     pipeline_exit   = 1
     upload_count    = 0

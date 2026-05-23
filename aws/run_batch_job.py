@@ -300,11 +300,24 @@ def _load_secrets():
     # ---- RDS ----
     rds_id = os.environ.get("RDS_CREDS_SECRET_ID", "osu-pipeline/rds")
     rds    = _load_secret(rds_id)
-    for key in ("RDS_HOST", "RDS_PORT", "RDS_DBNAME", "RDS_USER", "RDS_PASSWORD"):
-        if rds.get(key) and not os.environ.get(key):
-            os.environ[key] = str(rds[key])
-    if rds.get("RDS_HOST"):
-        log.info("RDS credentials loaded (%s)", rds["RDS_HOST"])
+    # Secret stores lowercase keys; map to uppercase env vars that main.py expects.
+    # AWS RDS Proxy uses "username" (not "user"); support both for safety.
+    _RDS_KEY_MAP = {
+        "RDS_HOST":     ("host",),
+        "RDS_PORT":     ("port",),
+        "RDS_DBNAME":   ("dbname",),
+        "RDS_USER":     ("username", "user"),
+        "RDS_PASSWORD": ("password",),
+    }
+    for env_key, secret_keys in _RDS_KEY_MAP.items():
+        if not os.environ.get(env_key):
+            for sk in secret_keys:
+                val = rds.get(sk)
+                if val:
+                    os.environ[env_key] = str(val)
+                    break
+    if os.environ.get("RDS_HOST"):
+        log.info("RDS credentials loaded (%s)", os.environ["RDS_HOST"])
     else:
         log.warning("RDS credentials not found in '%s' — PLSS resolution disabled", rds_id)
 

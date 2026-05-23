@@ -18,7 +18,7 @@ import boto3
 REGION        = "us-east-1"
 ACCOUNT_ID    = "225989338968"
 ECR_REPO      = f"{ACCOUNT_ID}.dkr.ecr.{REGION}.amazonaws.com/osu-pipeline"
-NEW_IMAGE_TAG = "v7-all-fixes"
+NEW_IMAGE_TAG = "v8-clean-start"
 NEW_IMAGE     = f"{ECR_REPO}:{NEW_IMAGE_TAG}"
 JOB_DEF_NAME   = "osu-pipeline-job"
 INPUT_BUCKET   = "osu-well-records-225989338968"
@@ -58,8 +58,14 @@ def register_new_revision() -> str:
     print(f"  Basing on {JOB_DEF_NAME}:{base['revision']} (latest active revision)")
     cp   = dict(base["containerProperties"])
 
-    # Swap image only
+    # Swap image + tune workers to reduce concurrent Gemini quota pressure.
+    # 30 tasks × 2 workers = 60 concurrent county calls vs 120 with WORKERS=4.
     cp["image"] = NEW_IMAGE
+    env = cp.get("environment", [])
+    for entry in env:
+        if entry["name"] in ("WORKERS", "MAX_WORKERS"):
+            entry["value"] = "2"
+    cp["environment"] = env
     # Keep jobRoleArn at top level (some API versions need it)
     job_role_arn = cp.get("jobRoleArn", "")
 
@@ -74,7 +80,7 @@ def register_new_revision() -> str:
     )
     arn = result["jobDefinitionArn"]
     rev = result["revision"]
-    print(f"  Registered {JOB_DEF_NAME}:{rev}  image={NEW_IMAGE}")
+    print(f"  Registered {JOB_DEF_NAME}:{rev}  image={NEW_IMAGE}  WORKERS=2")
     return arn
 
 
@@ -132,7 +138,7 @@ def clear_failed_slice_states() -> int:
 
 def submit_array_job(job_def_arn: str, array_size: int) -> str:
     resp = batch.submit_job(
-        jobName="osu-pipeline-v7-all-fixes",
+        jobName="osu-pipeline-v8-clean-start",
         jobQueue=JOB_QUEUE,
         jobDefinition=job_def_arn,
         arrayProperties={"size": array_size},

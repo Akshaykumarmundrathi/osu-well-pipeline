@@ -18,7 +18,7 @@ import boto3
 REGION        = "us-east-1"
 ACCOUNT_ID    = "225989338968"
 ECR_REPO      = f"{ACCOUNT_ID}.dkr.ecr.{REGION}.amazonaws.com/osu-pipeline"
-NEW_IMAGE_TAG = "v8-clean-start"
+NEW_IMAGE_TAG = "v9-threadfix"
 NEW_IMAGE     = f"{ECR_REPO}:{NEW_IMAGE_TAG}"
 JOB_DEF_NAME   = "osu-pipeline-job"
 INPUT_BUCKET   = "osu-well-records-225989338968"
@@ -138,7 +138,7 @@ def clear_failed_slice_states() -> int:
 
 def submit_array_job(job_def_arn: str, array_size: int) -> str:
     resp = batch.submit_job(
-        jobName="osu-pipeline-v8-clean-start",
+        jobName="osu-pipeline-v9-threadfix",
         jobQueue=JOB_QUEUE,
         jobDefinition=job_def_arn,
         arrayProperties={"size": array_size},

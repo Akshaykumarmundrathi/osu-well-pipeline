@@ -35,6 +35,13 @@ PROGRESS_KEY   = "state/progress_map.json"
 JOB_QUEUE      = "osu-pipeline-queue"
 LOG_GROUP      = "/aws/batch/osu-pipeline"
 
+# --- Dashboard alert thresholds (can be overridden via env) ---
+# Warn when logic_failed slices exceed this % of total.
+LOGIC_FAIL_WARN_PCT  = float(os.environ.get("LOGIC_FAIL_WARN_PCT",  "10"))
+LOGIC_FAIL_ERROR_PCT = float(os.environ.get("LOGIC_FAIL_ERROR_PCT", "30"))
+# Warn if no progress in this many minutes.
+STALL_WARN_MINUTES   = int(os.environ.get("STALL_WARN_MINUTES", "30"))
+
 # ANSI colours (disabled when not a TTY)
 _IS_TTY = sys.stdout.isatty()
 
@@ -289,6 +296,41 @@ def _print_dashboard(
     print(f"  {RED('Infra-failed ')} {n_infra:>6}  (will be retried)")
     print(f"  {YELLOW('Logic-failed ')} {n_logic:>6}  (skipped on retry)")
 
+    # --- Threshold alerts ---
+    logic_fail_pct = 100.0 * n_logic / n_total if n_total else 0.0
+    infra_fail_pct = 100.0 * n_infra / n_total if n_total else 0.0
+
+    if logic_fail_pct >= LOGIC_FAIL_ERROR_PCT:
+        print()
+        print(RED(f"  !! ALERT: {logic_fail_pct:.1f}% of slices are logic_failed "
+                  f"(threshold={LOGIC_FAIL_ERROR_PCT:.0f}%)"))
+        print(RED(  "     Likely a systematic code bug. Inspect CloudWatch logs before retrying."))
+        print(RED(  "     Use --retry-logic only after the root cause is fixed."))
+    elif logic_fail_pct >= LOGIC_FAIL_WARN_PCT:
+        print()
+        print(YELLOW(f"  WARN: {logic_fail_pct:.1f}% logic_failed "
+                     f"(alert threshold={LOGIC_FAIL_ERROR_PCT:.0f}%)"))
+
+    if infra_fail_pct > 20:
+        print(YELLOW(f"  WARN: {infra_fail_pct:.1f}% infra_failed — check Fargate capacity "
+                     f"and network config"))
+
+    # --- Stall detection ---
+    updated_str = progress_map.get("updated_at") or progress_map.get("updated_utc", "")
+    if updated_str:
+        try:
+            updated = datetime.fromisoformat(updated_str.replace("Z", "+00:00"))
+            if updated.tzinfo is None:
+                updated = updated.replace(tzinfo=timezone.utc)
+            stale_min = (datetime.now(timezone.utc) - updated).total_seconds() / 60
+            if stale_min >= STALL_WARN_MINUTES and n_run > 0:
+                print(YELLOW(
+                    f"  STALL: progress_map last updated {stale_min:.0f} min ago "
+                    f"(threshold={STALL_WARN_MINUTES} min) — orchestrator may be down"
+                ))
+        except Exception:
+            pass
+
     # Estimate ETA
     if progress_map.get("started_at") and n_done > 0 and n_total > n_done:
         try:
@@ -303,7 +345,10 @@ def _print_dashboard(
                 rate  = n_done / elapsed
                 eta_s = (n_total - n_done) / rate
                 eta_m = int(eta_s / 60)
-                print(f"\n  Rate: {rate*60:.1f} slices/min  —  ETA: ~{eta_m} min")
+                eta_label = f"{eta_m // 60}h {eta_m % 60}m" if eta_m > 60 else f"{eta_m}m"
+                behind = " — BEHIND SCHEDULE" if eta_m > 48 * 60 else ""
+                colour = RED if behind else (YELLOW if eta_m > 24 * 60 else lambda t: t)
+                print(colour(f"\n  Rate: {rate*60:.1f} slices/min  —  ETA: ~{eta_label}{behind}"))
         except Exception:
             pass
 

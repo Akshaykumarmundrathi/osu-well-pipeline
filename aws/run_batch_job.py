@@ -100,6 +100,26 @@ _DISK_CHECK_INTERVAL_S = 120   # check every 2 minutes
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".tif", ".tiff"}
 
 # ---------------------------------------------------------------------------
+# Post-run result thresholds (overridable via Batch job env vars)
+# ---------------------------------------------------------------------------
+# If >CODE_FAIL_ABORT_PCT% of records have 'exception' errors → code bug,
+# mark slice logic_failed (exit 2) so orchestrator won't auto-retry.
+_CODE_FAIL_WARN_PCT  = float(os.environ.get("CODE_FAIL_WARN_PCT",  "5"))
+_CODE_FAIL_ABORT_PCT = float(os.environ.get("CODE_FAIL_ABORT_PCT", "30"))
+# If >API_FAIL_ABORT_PCT% of records hit API errors → quota exhausted,
+# mark api_saturated (exit 3) so orchestrator retries with longer delay.
+_API_FAIL_WARN_PCT   = float(os.environ.get("API_FAIL_WARN_PCT",   "20"))
+_API_FAIL_ABORT_PCT  = float(os.environ.get("API_FAIL_ABORT_PCT",  "70"))
+# Warn (but don't abort) if overall record failure rate is high.
+_TOTAL_FAIL_WARN_PCT = float(os.environ.get("TOTAL_FAIL_WARN_PCT", "40"))
+
+# Sentinel exit codes understood by orchestrate_robust._classify_slice()
+EXIT_LOGIC_FAILED  = 2   # systematic code-level failures — do NOT auto-retry
+EXIT_API_SATURATED = 3   # API quota exhausted — retry only after long delay
+
+_STAGES = ("latlong", "grid", "location", "county", "dot")
+
+# ---------------------------------------------------------------------------
 # SIGTERM handler
 # ---------------------------------------------------------------------------
 _terminating   = False
@@ -447,7 +467,8 @@ def _upload_results(output_root: Path, prune_images_after: bool = False) -> int:
     return n
 
 
-def _write_job_status(exit_code: int, note: str, elapsed: float):
+def _write_job_status(exit_code: int, note: str, elapsed: float,
+                      analysis: dict | None = None):
     body = json.dumps({
         "job_id":      JOB_ID,
         "job_index":   JOB_INDEX,
@@ -458,6 +479,8 @@ def _write_job_status(exit_code: int, note: str, elapsed: float):
         "elapsed_s":   round(elapsed),
         "s3_prefix":   f"s3://{OUTPUT_BUCKET}/{SLICE_PREFIX}/",
         "timestamp":   time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        # Result quality analysis — used by orchestrate_robust._classify_slice()
+        "analysis":    analysis or {},
     }, indent=2).encode("utf-8")
     try:
         _with_retry(
@@ -470,6 +493,121 @@ def _write_job_status(exit_code: int, note: str, elapsed: float):
         )
     except Exception as e:
         log.warning("Could not write job_status.json: %s", e)
+
+# ---------------------------------------------------------------------------
+# Post-run result analysis
+# ---------------------------------------------------------------------------
+def _analyze_results(output_root: Path) -> dict:
+    """
+    Read processing_status.csv and compute per-record failure statistics.
+    Returns a verdict and structured counts that are written into job_status.json
+    so the orchestrator can make smart retry decisions.
+
+    Verdict values
+    --------------
+    ok            : all failure rates within thresholds
+    warn          : elevated failures, still within abort thresholds
+    logic_failed  : >CODE_FAIL_ABORT_PCT records have code exceptions
+                    → orchestrator will NOT auto-retry this slice
+    api_saturated : >API_FAIL_ABORT_PCT records hit API quota errors
+                    → orchestrator retries only after extended backoff
+    """
+    status_csv = output_root / "processing_status.csv"
+    stage_counts = {s: {"done": 0, "failed": 0, "skipped": 0, "pending": 0}
+                    for s in _STAGES}
+    error_types: dict[str, int] = {}
+    total = failed_records = api_records = code_records = 0
+
+    if not status_csv.exists():
+        log.warning("processing_status.csv not found — skipping result analysis")
+        return {"total": 0, "verdict": "ok", "stage_counts": stage_counts,
+                "error_types": {}}
+
+    try:
+        with status_csv.open(encoding="utf-8", errors="replace", newline="") as f:
+            for row in csv.DictReader(f):
+                total += 1
+                has_fail = has_api = has_code = False
+                for stage in _STAGES:
+                    st = (row.get(f"{stage}_status") or "pending").lower()
+                    et = (row.get(f"{stage}_error_type") or "unknown").lower()
+                    # Normalise unexpected status strings to known buckets.
+                    if st not in stage_counts[stage]:
+                        st = "pending"
+                    stage_counts[stage][st] += 1
+                    if st == "failed":
+                        has_fail = True
+                        error_types[et] = error_types.get(et, 0) + 1
+                        if et == "api_error":
+                            has_api = True
+                        elif et == "exception":
+                            has_code = True
+                if has_fail:  failed_records += 1
+                if has_api:   api_records    += 1
+                if has_code:  code_records   += 1
+    except Exception as exc:
+        log.warning("Could not parse processing_status.csv: %s", exc)
+        return {"total": 0, "verdict": "ok", "stage_counts": stage_counts,
+                "error_types": {}}
+
+    if total == 0:
+        return {"total": 0, "verdict": "ok", "stage_counts": stage_counts,
+                "error_types": {}}
+
+    total_fail_pct = 100.0 * failed_records / total
+    api_fail_pct   = 100.0 * api_records    / total
+    code_fail_pct  = 100.0 * code_records   / total
+
+    # --- Determine verdict (most severe threshold wins) ---
+    if code_fail_pct >= _CODE_FAIL_ABORT_PCT:
+        verdict = "logic_failed"
+        log.error(
+            "THRESHOLD: code exceptions %.1f%% >= abort %.0f%% "
+            "— slice marked logic_failed, will NOT be auto-retried.  "
+            "Top error types: %s",
+            code_fail_pct, _CODE_FAIL_ABORT_PCT,
+            sorted(error_types.items(), key=lambda x: -x[1])[:5],
+        )
+    elif api_fail_pct >= _API_FAIL_ABORT_PCT:
+        verdict = "api_saturated"
+        log.error(
+            "THRESHOLD: api_error %.1f%% >= abort %.0f%% "
+            "— API quota exhausted, retry after backoff.",
+            api_fail_pct, _API_FAIL_ABORT_PCT,
+        )
+    elif (code_fail_pct >= _CODE_FAIL_WARN_PCT
+          or api_fail_pct >= _API_FAIL_WARN_PCT
+          or total_fail_pct >= _TOTAL_FAIL_WARN_PCT):
+        verdict = "warn"
+        log.warning(
+            "THRESHOLD WARN: total_fail=%.1f%%  api_err=%.1f%%  code_err=%.1f%%",
+            total_fail_pct, api_fail_pct, code_fail_pct,
+        )
+    else:
+        verdict = "ok"
+
+    log.info(
+        "Results: total=%d  failed_records=%d(%.1f%%)  "
+        "api_err=%d(%.1f%%)  code_err=%d(%.1f%%)  verdict=%s",
+        total, failed_records, total_fail_pct,
+        api_records, api_fail_pct,
+        code_records, code_fail_pct,
+        verdict,
+    )
+
+    return {
+        "total":              total,
+        "failed_records":     failed_records,
+        "total_fail_pct":     round(total_fail_pct, 1),
+        "api_records":        api_records,
+        "api_fail_pct":       round(api_fail_pct, 1),
+        "code_records":       code_records,
+        "code_fail_pct":      round(code_fail_pct, 1),
+        "verdict":            verdict,
+        "stage_counts":       stage_counts,
+        "error_types":        error_types,
+    }
+
 
 # ---------------------------------------------------------------------------
 # Periodic checkpoint thread
@@ -519,6 +657,7 @@ def main():
     start_time      = time.time()
     pipeline_exit   = 1
     upload_count    = 0
+    analysis: dict  = {}
     stop_checkpoint = threading.Event()
 
     OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
@@ -549,8 +688,31 @@ def main():
     finally:
         stop_checkpoint.set()   # stop periodic thread
         elapsed = time.time() - start_time
-        note    = ("SIGTERM" if _terminating else
-                   "ok"      if pipeline_exit == 0 else f"exit={pipeline_exit}")
+
+        # --- Result quality analysis ---
+        # Run even on failure so partial results are characterised.
+        # Only upgrade exit codes when pipeline appeared to run (exit 0 or 1).
+        if not _terminating and pipeline_exit in (0, 1):
+            try:
+                analysis = _analyze_results(OUTPUT_ROOT)
+                verdict  = analysis.get("verdict", "ok")
+                if verdict == "logic_failed" and pipeline_exit == 0:
+                    log.error("Upgrading exit %d -> %d (logic_failed threshold)",
+                              pipeline_exit, EXIT_LOGIC_FAILED)
+                    pipeline_exit = EXIT_LOGIC_FAILED
+                elif verdict == "api_saturated" and pipeline_exit == 0:
+                    log.error("Upgrading exit %d -> %d (api_saturated threshold)",
+                              pipeline_exit, EXIT_API_SATURATED)
+                    pipeline_exit = EXIT_API_SATURATED
+            except Exception:
+                log.warning("Result analysis failed:\n%s", traceback.format_exc())
+
+        note = ("SIGTERM" if _terminating else
+                "ok"      if pipeline_exit == 0 else
+                f"logic_failed" if pipeline_exit == EXIT_LOGIC_FAILED else
+                f"api_saturated" if pipeline_exit == EXIT_API_SATURATED else
+                f"exit={pipeline_exit}")
+
         log.info("Final upload (%.0fs elapsed, status=%s) ...", elapsed, note)
 
         try:
@@ -559,7 +721,7 @@ def main():
             log.error("Final upload failed:\n%s", traceback.format_exc())
 
         try:
-            _write_job_status(pipeline_exit, note, elapsed)
+            _write_job_status(pipeline_exit, note, elapsed, analysis)
         except Exception:
             pass
 

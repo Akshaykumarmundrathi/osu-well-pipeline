@@ -54,6 +54,20 @@ DEFAULT_WORKERS    = 4
 POLL_INTERVAL_S    = 60       # seconds between Batch status polls
 PROGRESS_MAP_KEY   = "state/progress_map.json"
 
+# ---------------------------------------------------------------------------
+# Pipeline-level thresholds
+# ---------------------------------------------------------------------------
+# If >LOGIC_FAIL_ABORT_PCT% of all slices are classified as logic_failed,
+# the run is halted before submission — this indicates a systematic code bug.
+LOGIC_FAIL_ABORT_PCT = float(os.environ.get("LOGIC_FAIL_ABORT_PCT", "30"))
+# Accept the run as "complete enough" if this fraction of slices are done
+# (remaining are logic_failed and won't improve on retry).
+MIN_DONE_PCT_PASS    = float(os.environ.get("MIN_DONE_PCT_PASS",    "90"))
+
+# Sentinel exit codes written by run_batch_job.py — must match.
+_EXIT_LOGIC_FAILED  = 2   # systematic code-level failures
+_EXIT_API_SATURATED = 3   # API quota exhausted
+
 # Infra-failure patterns — jobs with these reason substrings are safe to retry.
 _INFRA_REASONS = (
     "ResourceInitializationError",
@@ -156,29 +170,61 @@ def _classify_slice(status_json: dict | None) -> str:
     """
     Return one of: 'done' | 'infra_failed' | 'logic_failed' | 'pending'
 
-    Infra failures are those where the container started but exited within
-    60 s — indicating the container environment itself failed (OOM-killed
-    before processing, missing mount, etc.) rather than a code error.
-    Note: ResourceInitializationError jobs never write job_status.json at
-    all, so those slices stay 'pending' and are always re-submitted.
+    Classification priority (first match wins):
+    1. No status file             → pending  (ResourceInitializationError never writes it)
+    2. exit_code == 0             → done
+    3. exit_code == 2             → logic_failed  (run_batch_job threshold: code exceptions)
+    4. exit_code == 3             → logic_failed  (api_saturated — treat as logic_failed so
+                                    orchestrator doesn't blindly hammer a saturated API)
+    5. elapsed < 60 s             → infra_failed  (container died before doing any work)
+    6. note contains SIGTERM      → infra_failed  (Fargate preemption)
+    7. note contains infra keyword→ infra_failed
+    8. analysis.verdict in known  → use that verdict
+    9. default                    → logic_failed  (ran, produced bad results, non-retriable)
     """
     if status_json is None:
         return "pending"
+
     ec      = status_json.get("exit_code", -1)
     elapsed = status_json.get("elapsed_s", 3600)
     note    = status_json.get("note", "")
+
     if ec == 0:
         return "done"
-    # Short elapsed → container never really ran (network init, ECR pull fail,
-    # OOM-before-work, etc.)  → safe to retry.
+
+    # Sentinel exit codes set by run_batch_job.py thresholds.
+    if ec == _EXIT_LOGIC_FAILED:
+        return "logic_failed"
+    if ec == _EXIT_API_SATURATED:
+        # API saturation is not an infra failure (infra is fine) but it IS
+        # retryable once quota resets — map to infra_failed so orchestrator
+        # re-submits rather than permanently skipping the slice.
+        # The long Batch retry delay provides natural backoff.
+        return "infra_failed"
+
+    # Container died quickly → infra issue (ECR pull, OOM-before-work, network).
     if elapsed < 60:
         return "infra_failed"
-    # Note field from run_batch_job uses "SIGTERM" on preemption → infra.
+
+    # Fargate preemption.
     if "SIGTERM" in note:
         return "infra_failed"
-    # Explicit infra keywords in the note (legacy job_status fields).
+
+    # Explicit infra keywords in legacy note field.
     if any(kw in note for kw in _INFRA_REASONS):
         return "infra_failed"
+
+    # New: use embedded analysis verdict if present.
+    verdict = status_json.get("analysis", {}).get("verdict", "")
+    if verdict == "logic_failed":
+        return "logic_failed"
+    if verdict in ("api_saturated", "warn", "ok"):
+        # 'ok'/'warn' with non-zero exit → something crashed after analysis
+        # but record-level failures are within threshold → treat as infra_failed
+        # (the crash itself, not the data quality, caused the failure).
+        return "infra_failed"
+
+    # Default: ran long enough, no known infra cause → assume code/data issue.
     return "logic_failed"
 
 
@@ -561,7 +607,36 @@ def main():
     # 2. Read existing slice states from S3.
     states = _read_slice_states(n_slices)
 
-    # 3. Decide which slices to submit.
+    # 3. Pipeline-level threshold gates.
+    done_count       = sum(1 for s in states.values() if s == "done")
+    logic_fail_count = sum(1 for s in states.values() if s == "logic_failed")
+    infra_fail_count = sum(1 for s in states.values() if s == "infra_failed")
+    pending_count    = sum(1 for s in states.values() if s == "pending")
+
+    logic_fail_pct = 100.0 * logic_fail_count / n_slices
+    done_pct       = 100.0 * done_count       / n_slices
+
+    if logic_fail_pct >= LOGIC_FAIL_ABORT_PCT and not args.force_all and not args.retry_logic:
+        log.error(
+            "PIPELINE ABORT: %.1f%% of slices are logic_failed "
+            "(threshold=%.0f%%, logic_fail=%d/%d).  "
+            "This indicates a systematic code bug — inspect CloudWatch logs "
+            "before re-submitting.  Use --retry-logic to override.",
+            logic_fail_pct, LOGIC_FAIL_ABORT_PCT, logic_fail_count, n_slices,
+        )
+        _write_progress_map(states, [])
+        sys.exit(2)   # exit 2 = caller-visible "logic_failed" signal
+
+    if done_pct >= MIN_DONE_PCT_PASS and not args.force_all:
+        log.info(
+            "Pipeline %.1f%% done (>= threshold %.0f%%) — accepting as complete.  "
+            "logic_failed=%d  infra_failed=%d  pending=%d",
+            done_pct, MIN_DONE_PCT_PASS, logic_fail_count, infra_fail_count, pending_count,
+        )
+        _write_progress_map(states, [])
+        sys.exit(0)
+
+    # 4. Decide which slices to submit.
     if args.force_all:
         to_submit = list(range(n_slices))
     else:
@@ -571,11 +646,12 @@ def main():
             or (args.retry_logic and s == "logic_failed")
         ]
 
-    done_count = sum(1 for s in states.values() if s == "done")
     log.info(
-        "Plan: %d to submit  |  %d already done  |  %d logic_failed (skipped unless --retry-logic)",
-        len(to_submit), done_count,
-        sum(1 for s in states.values() if s == "logic_failed"),
+        "Plan: %d to submit  |  done=%d(%.1f%%)  logic_failed=%d(%.1f%%)  "
+        "infra_failed=%d  pending=%d",
+        len(to_submit), done_count, done_pct,
+        logic_fail_count, logic_fail_pct,
+        infra_fail_count, pending_count,
     )
 
     if args.status_only:
@@ -584,11 +660,14 @@ def main():
         return
 
     if not to_submit:
-        log.info("Nothing to do — all slices are done or logic_failed.")
+        log.info(
+            "Nothing to submit — done=%d  logic_failed=%d  infra_failed=%d  pending=%d",
+            done_count, logic_fail_count, infra_fail_count, pending_count,
+        )
         _write_progress_map(states, [])
         return
 
-    # 4. Ensure job definition has networking fix.
+    # 5. Ensure job definition has networking fix.
     job_def = _get_active_job_def()
     if _has_public_ip(job_def):
         job_def_ref = f"{JOB_DEF_NAME}:{job_def['revision']}"
@@ -601,7 +680,7 @@ def main():
             job_def_ref = f"{JOB_DEF_NAME}:XX (dry-run)"
             log.info("[DRY RUN] would register new job def revision")
 
-    # 5. Submit.
+    # 6. Submit.
     submitted_ids: list[str] = []
     job_id = _submit_array_job(
         job_def_ref, to_submit,
@@ -614,10 +693,10 @@ def main():
 
     log.info("Submitted %d job(s). Entering monitor loop ...", len(submitted_ids))
 
-    # 6. Monitor to completion.
+    # 7. Monitor to completion.
     success = _monitor_until_done(submitted_ids, states, n_slices, dry_run=args.dry_run)
 
-    # 7. Final progress map.
+    # 8. Final progress map.
     _write_progress_map(states, [])
     log.info(
         "Final state: done=%d / %d  (%.1f%%)",

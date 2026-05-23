@@ -127,9 +127,9 @@ def _banner(msg: str):
 def _section_header(collection: str, year: str, month: str, count: int):
     """Light divider introducing a new (collection / year / month) group."""
     label = f"{collection or 'cli'} / {year or '-'} / {month or '-'}"
-    _p(f"\n  {'─'*60}")
+    _p(f"\n  {'-'*60}")
     _p(f"  {label}   [{count:,} records]")
-    _p(f"  {'─'*60}")
+    _p(f"  {'-'*60}")
 
 
 def _stage_line(label: str, text: str):
@@ -329,11 +329,18 @@ def write_metadata(record: DatasetRecord, results: dict, paths: OutputPathBuilde
     return meta_path
 
 
-def _append_failed(record: DatasetRecord, stage: str, error: str):
-    """Append one row to manual_review/failed_records.csv (with header if new)."""
-    FAILED_RECORDS_CSV.parent.mkdir(parents=True, exist_ok=True)
-    exists = FAILED_RECORDS_CSV.exists()
-    with FAILED_RECORDS_CSV.open("a", newline="", encoding="utf-8") as f:
+def _append_failed(record: DatasetRecord, stage: str, error: str,
+                   output_root: Path | None = None):
+    """Append one row to <output_root>/manual_review/failed_records.csv."""
+    if output_root is None:
+        # Fallback: use the config constant (correct for cloud runs where
+        # OUTPUT_ROOT env var matches the actual output directory).
+        csv_path = FAILED_RECORDS_CSV
+    else:
+        csv_path = output_root / "manual_review" / "failed_records.csv"
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    exists = csv_path.exists()
+    with csv_path.open("a", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         if not exists:
             w.writerow(["pdf_stem", "pdf_path", "stage", "error", "timestamp"])
@@ -356,8 +363,7 @@ def _append_review_queue(output_root: Path, record: DatasetRecord,
     `image_path` (relative to output_root, or the S3 URI after upload),
     and either approves or corrects the detection before the next run.
     """
-    from config import MANUAL_REVIEW_DIR
-    review_csv = MANUAL_REVIEW_DIR / "review_queue.csv"
+    review_csv = output_root / "manual_review" / "review_queue.csv"
     review_csv.parent.mkdir(parents=True, exist_ok=True)
     exists = review_csv.exists()
     with review_csv.open("a", newline="", encoding="utf-8") as f:
@@ -526,10 +532,8 @@ def write_summary_csvs(status: ProcessingStatus, output_root: Path):
     `review_reasons` column listing what triggered the flag — so they
     aren't duplicated to the failed file.
     """
-    from config import MANUAL_REVIEW_DIR
-
     success_path = output_root / "success.csv"
-    failed_path  = MANUAL_REVIEW_DIR / "failed.csv"
+    failed_path  = output_root / "manual_review" / "failed.csv"
     failed_path.parent.mkdir(parents=True, exist_ok=True)
 
     n_success = n_review = n_failed = 0
@@ -864,7 +868,8 @@ def _process_record_worker(arg):
 
 
 def _apply_results(record: DatasetRecord, stages: tuple,
-                   results: dict, status: ProcessingStatus):
+                   results: dict, status: ProcessingStatus,
+                   output_root: Path | None = None):
     """
     Mirror the inline status mutations the original sequential worker did.
     Called from the parent process so the master ProcessingStatus and
@@ -881,7 +886,7 @@ def _apply_results(record: DatasetRecord, stages: tuple,
             if r.get("error") and not r.get("detected"):
                 err = r["error"]
                 status.mark_failed(record.pdf_stem, stage, err)
-                _append_failed(record, stage, err)
+                _append_failed(record, stage, err, output_root=output_root)
             else:
                 status.mark_done(record.pdf_stem, stage, r)
 
@@ -906,7 +911,7 @@ def run_one_record(
     _stem, results, lines = _process_record_worker(arg)
     for ln in lines:
         _p(ln)
-    _apply_results(record, stages, results, status)
+    _apply_results(record, stages, results, status, output_root=paths.root)
     return results
 
 
@@ -1090,7 +1095,8 @@ def _retry_record(record: DatasetRecord, stages: tuple,
         else:
             new_err = (r.get("error") if r else "no_change") or "no_change"
             status.mark_failed(record.pdf_stem, stage, new_err)
-            _append_failed(record, stage, f"retry({et}): {new_err}")
+            _append_failed(record, stage, f"retry({et}): {new_err}",
+                           output_root=paths.root)
             parts.append(f"{label} {et}->{new_err[:20]} ({elapsed:.0f}s)")
 
     summary = " | ".join(parts) if parts else "no FAILED stages"
@@ -1292,7 +1298,8 @@ def run_pipeline(args):
                 if rec is None:
                     continue
                 try:
-                    _apply_results(rec, stages, results, status)
+                    _apply_results(rec, stages, results, status,
+                                   output_root=output_root)
                 except Exception as exc:
                     _p(f"  apply_results failed for {stem}: {exc}")
                 # Insights aggregation (single-writer, parent process).

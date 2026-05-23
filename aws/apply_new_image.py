@@ -18,7 +18,7 @@ import boto3
 REGION        = "us-east-1"
 ACCOUNT_ID    = "225989338968"
 ECR_REPO      = f"{ACCOUNT_ID}.dkr.ecr.{REGION}.amazonaws.com/osu-pipeline"
-NEW_IMAGE_TAG = "v12-fixes"
+NEW_IMAGE_TAG = "v13-flat"
 NEW_IMAGE     = f"{ECR_REPO}:{NEW_IMAGE_TAG}"
 JOB_DEF_NAME   = "osu-pipeline-job"
 INPUT_BUCKET   = "osu-well-records-225989338968"

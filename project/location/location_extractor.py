@@ -22,6 +22,7 @@ import re
 from pathlib import Path
 
 from config import (
+    ILLEGIBLE_WORD_THRESHOLD,
     LOCATION_KEYWORDS, LOCATION_MIN_OVERLAP, LOCATION_MIN_OVERLAP_RETRY,
 )
 from location.grouping import (
@@ -180,6 +181,16 @@ def process_single_location(
                 pil_image, manager=manager, page_num=page_num,
             )
             if not annotations:
+                continue
+
+            # Fast illegibility guard: if Tesseract returned fewer than
+            # ILLEGIBLE_WORD_THRESHOLD word tokens the page is almost certainly
+            # handwritten beyond what OCR can decode.  Skipping the grouping
+            # and keyword-search saves 30-90s of wasted computation per page.
+            word_count = len(annotations) - 1   # index 0 is full-page blob
+            if word_count < ILLEGIBLE_WORD_THRESHOLD:
+                log.debug("Page %d: only %d words from OCR — skipping (illegible)",
+                          page_num, word_count)
                 continue
 
             sections, townships, ranges = find_keywords_lists(

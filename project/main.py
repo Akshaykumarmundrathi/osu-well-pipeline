@@ -39,8 +39,9 @@ if _env_file.exists():
             os.environ.setdefault(_k.strip(), _v.strip())  # setdefault: never overwrite real env
 
 from config import (
-    ALL_STAGES, DATASET_INDEX_CSV, FAILED_RECORDS_CSV,
-    LATLONG_MIN_COLLECTION_NUM,
+    ALL_STAGES, COUNTY_REVIEW_BELOW, DATASET_INDEX_CSV, DOT_REVIEW_BELOW,
+    FAILED_RECORDS_CSV, GRID_REVIEW_BELOW, LATLONG_MIN_COLLECTION_NUM,
+    LATLONG_REVIEW_BELOW, LOCATION_REVIEW_BELOW,
     OUTPUT_ROOT, PROCESSING_STATUS_CSV,
     RESOLUTION_MULTIPLIER, SOURCE_ROOT,
     STAGE_COUNTY, STAGE_DOT, STAGE_GRID, STAGE_LATLONG, STAGE_LOCATION,
@@ -383,6 +384,50 @@ def _append_review_queue(output_root: Path, record: DatasetRecord,
             "reason":     reason,
             "timestamp":  _now(),
         })
+
+
+def _review_queue_count_by_stage(output_root: Path) -> dict[str, int]:
+    """Read review_queue.csv and return {stage: row_count}. Fast (no full parse)."""
+    csv_path = output_root / "manual_review" / "review_queue.csv"
+    if not csv_path.exists():
+        return {}
+    counts: dict[str, int] = {}
+    try:
+        with csv_path.open(newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                stage = row.get("stage", "?")
+                counts[stage] = counts.get(stage, 0) + 1
+    except Exception:
+        pass
+    return counts
+
+
+def _print_review_summary(output_root: Path,
+                          before: dict[str, int],
+                          label: str = "") -> None:
+    """
+    Print new entries added to review_queue.csv since `before` snapshot.
+    Call with before=_review_queue_count_by_stage(output_root) captured
+    at the start of a batch group, then call again after the group finishes.
+    """
+    after  = _review_queue_count_by_stage(output_root)
+    delta  = {k: after.get(k, 0) - before.get(k, 0) for k in after}
+    delta  = {k: v for k, v in delta.items() if v > 0}
+    total  = sum(delta.values())
+    if total == 0:
+        return
+    suffix = f"  [{label}]" if label else ""
+    _p(f"\n  -- Review queue{suffix}: {total} record(s) flagged --")
+    for stage, count in sorted(delta.items()):
+        threshold = {
+            STAGE_LATLONG:  f"conf<{LATLONG_REVIEW_BELOW}%",
+            STAGE_GRID:     f"conf<{GRID_REVIEW_BELOW}%",
+            STAGE_LOCATION: f"partial STR (<{LOCATION_REVIEW_BELOW}%)",
+            STAGE_COUNTY:   f"score<{COUNTY_REVIEW_BELOW}%",
+            STAGE_DOT:      f"conf<{DOT_REVIEW_BELOW}%",
+        }.get(stage, "low confidence")
+        _p(f"    {stage:<12}  {count:>4} record(s)  ({threshold})")
+    _p(f"    -> manual_review/review_queue.csv")
 
 
 def _int_or_zero(v) -> int:
@@ -728,6 +773,23 @@ def _process_record_worker(arg):
                 results[stage] = SKIPPED
                 continue
 
+        # Skip location for early/transition tiers — handwritten STR is unreadable
+        # by Tesseract (50-150s wasted per record, always returns not_found).
+        # Guard: only skip when collection_num is known (>0); unknown collections
+        # (ad-hoc --flat test runs) keep location enabled.
+        if stage == STAGE_LOCATION:
+            _cnum_loc = getattr(record, "collection_num", None) or 0
+            if _cnum_loc:
+                from config import TIER_CONFIG, tier_for as _tf_loc
+                _loc_tier = _tf_loc(_cnum_loc)
+                if not TIER_CONFIG.get(_loc_tier, {}).get("run_location", True):
+                    lines.append(
+                        f"  {label:<{_COL}}skipped  "
+                        f"(tier '{_loc_tier}' STR is handwritten, unreadable)"
+                    )
+                    results[stage] = SKIPPED
+                    continue
+
         # Skip grid + location when lat/lon was already found (this run or prior).
         # Only apply the "prior run" branch when resume=True — with --no-resume the
         # prior row's latlong_lat/lon must not influence whether we run these stages.
@@ -812,30 +874,89 @@ def _process_record_worker(arg):
                 except ValueError:
                     rel_img = img_path
 
+            # Annotated full-page view is more useful for human review than the
+            # tight crop; use it when present, fall back to crop path.
+            ann_path = r.get("annotated_path", "")
+            rel_ann  = ""
+            if ann_path:
+                try:
+                    rel_ann = Path(ann_path).relative_to(Path(output_root_str)).as_posix()
+                except ValueError:
+                    rel_ann = ann_path
+            review_img = rel_ann or rel_img
+
+            # Flag low-confidence lat/lon for manual review.
+            if stage == STAGE_LATLONG:
+                if conf < LATLONG_REVIEW_BELOW:
+                    reason = f"latlong_conf={conf}<{LATLONG_REVIEW_BELOW}"
+                    pdf_log.info("Low-confidence latlong (%d%%) → review queue", conf)
+                    try:
+                        _append_review_queue(
+                            Path(output_root_str), record,
+                            STAGE_LATLONG, conf, rel_img, reason,
+                        )
+                    except Exception as _rq_exc:
+                        pdf_log.debug("review_queue write failed: %s", _rq_exc)
+
             # Flag low-confidence grid for manual review.
             if stage == STAGE_GRID:
-                from config import GRID_REVIEW_BELOW
                 if conf < GRID_REVIEW_BELOW:
                     reason = f"grid_conf={conf}<{GRID_REVIEW_BELOW}"
                     pdf_log.info("Low-confidence grid (%d%%) → review queue", conf)
                     try:
                         _append_review_queue(
                             Path(output_root_str), record,
-                            "grid", conf, rel_img, reason,
+                            STAGE_GRID, conf, rel_img, reason,
                         )
                     except Exception as _rq_exc:
                         pdf_log.debug("review_queue write failed: %s", _rq_exc)
 
-            # Flag low-confidence dot for manual review; then delete grid PNG.
+            # Flag partial location (any STR field missing) for manual review.
+            if stage == STAGE_LOCATION:
+                if conf < LOCATION_REVIEW_BELOW:
+                    missing = [
+                        f for f, k in [("sec", "section"), ("twp", "township"), ("rng", "range")]
+                        if not r.get(k)
+                    ]
+                    reason = (
+                        f"partial STR ({conf}%): missing "
+                        f"{', '.join(missing) if missing else 'unknown'}"
+                    )
+                    pdf_log.info("Partial location STR (%d%%) → review queue", conf)
+                    try:
+                        _append_review_queue(
+                            Path(output_root_str), record,
+                            STAGE_LOCATION, conf, review_img, reason,
+                        )
+                    except Exception as _rq_exc:
+                        pdf_log.debug("review_queue write failed: %s", _rq_exc)
+
+            # Flag low-confidence county match for manual review.
+            if stage == STAGE_COUNTY:
+                score = int(r.get("fuzzy_score", conf))
+                if score < COUNTY_REVIEW_BELOW:
+                    reason = (
+                        f"county_score={score}<{COUNTY_REVIEW_BELOW}"
+                        f" ({r.get('name', '')})"
+                    )
+                    pdf_log.info("Low-confidence county (%d%%) → review queue", score)
+                    try:
+                        _append_review_queue(
+                            Path(output_root_str), record,
+                            STAGE_COUNTY, score, review_img, reason,
+                        )
+                    except Exception as _rq_exc:
+                        pdf_log.debug("review_queue write failed: %s", _rq_exc)
+
+            # Flag low-confidence dot for manual review.
             if stage == STAGE_DOT:
-                from config import DOT_REVIEW_BELOW
                 if conf < DOT_REVIEW_BELOW:
                     reason = f"dot_conf={conf}<{DOT_REVIEW_BELOW}"
                     pdf_log.info("Low-confidence dot (%d%%) → review queue", conf)
                     try:
                         _append_review_queue(
                             Path(output_root_str), record,
-                            "dot", conf, rel_img, reason,
+                            STAGE_DOT, conf, rel_img, reason,
                         )
                     except Exception as _rq_exc:
                         pdf_log.debug("review_queue write failed: %s", _rq_exc)
@@ -1277,6 +1398,8 @@ def run_pipeline(args):
     insights = InsightsCollector(output_root, workers=workers,
                                  total_records=len(records))
 
+    _before_run = _review_queue_count_by_stage(output_root)
+
     for (collection, year, month), month_recs in month_groups:
         cur_year_key = (collection, year)
 
@@ -1286,6 +1409,7 @@ def run_pipeline(args):
                           label=f"{prev_year_key[0]} / {prev_year_key[1]}")
             year_group_records = []
 
+        _before_month = _review_queue_count_by_stage(output_root)
         _section_header(collection, year, month, len(month_recs))
 
         month_done = month_failed = month_skipped = 0
@@ -1352,6 +1476,8 @@ def run_pipeline(args):
                       total=len(records),
                       label=f"{collection} / {year} / {month}")
 
+        _print_review_summary(output_root, _before_month,
+                              f"{collection}/{year}/{month}")
         _totals_line(total_done, total_failed, total_skipped, len(records))
 
         year_group_records.extend(month_recs)
@@ -1362,6 +1488,8 @@ def run_pipeline(args):
         _retry_failed(year_group_records, stages, paths, status,
                       total=len(records),
                       label=f"{prev_year_key[0]} / {prev_year_key[1]}")
+
+    _print_review_summary(output_root, _before_run, "full run")
 
     # -- Final summary ---------------------------------------------------------
     status.force_save()

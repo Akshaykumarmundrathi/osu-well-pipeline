@@ -30,6 +30,7 @@ from config import (
     EXTEND_LEFT_PIXELS,
     EXTEND_RIGHT_PIXELS,
     FUZZY_MATCH_THRESHOLD,
+    ILLEGIBLE_WORD_THRESHOLD,
     MAX_COUNTY_PAGES,
     RETRY_CONFIDENCE_THRESHOLD,
     VERTICAL_PADDING_PIXELS,
@@ -185,6 +186,14 @@ def _try_page(
         log.warning("No OCR annotations on page %d", page_num + 1)
         return None, False
 
+    # Illegibility guard: very few OCR tokens → handwritten or blank page.
+    # The "County" keyword won't be found, and calling Gemini on noise is wasteful.
+    word_count = len(annotations) - 1
+    if word_count < ILLEGIBLE_WORD_THRESHOLD:
+        log.debug("Page %d: only %d words from OCR — skipping county (illegible)",
+                  page_num + 1, word_count)
+        return None, False
+
     kw_box = find_keyword_box(annotations, COUNTY_KEYWORDS)
     if kw_box is None:
         log.debug("County keyword not on page %d", page_num + 1)
@@ -254,7 +263,8 @@ def _try_page(
             # -- Pass 1 (Flash) on the crop ----------------------------------
             raw1 = _gemini_call(flash, cfg, prompt_pass1, crop)
             result["pass1_result"] = raw1
-            if raw1.lower() != "not detected.":
+            p1_not_found = raw1.lower().strip() in ("not detected.", "not detected", "")
+            if not p1_not_found:
                 n1, s1 = _fuzzy_match(raw1)
                 if n1 and s1 >= RETRY_CONFIDENCE_THRESHOLD:
                     log.info("County (P1) = %r  score=%d", n1, s1)
@@ -264,16 +274,24 @@ def _try_page(
                     return result, True
 
             # -- Pass 2 (Pro) on the crop ------------------------------------
-            raw2 = _gemini_call(pro, cfg, prompt_pass2, crop)
-            result["pass2_result"] = raw2
-            if raw2.lower() != "not detected.":
-                n2, s2 = _fuzzy_match(raw2)
-                if n2 and s2 >= FUZZY_MATCH_THRESHOLD:
-                    log.info("County (P2) = %r  score=%d", n2, s2)
-                    result.update(detected=True, name=n2,
-                                  fuzzy_score=s2, confidence=s2,
-                                  method="pro")
-                    return result, True
+            # Skip if: (a) Flash already said "not detected" AND there is no
+            # weak structural-anchor candidate.  Flash sees the same image; if
+            # it found nothing, Pro is very unlikely to do better and costs more.
+            skip_pass2 = p1_not_found and not anchor_name
+            if not skip_pass2:
+                raw2 = _gemini_call(pro, cfg, prompt_pass2, crop)
+                result["pass2_result"] = raw2
+                if raw2.lower().strip() not in ("not detected.", "not detected", ""):
+                    n2, s2 = _fuzzy_match(raw2)
+                    if n2 and s2 >= FUZZY_MATCH_THRESHOLD:
+                        log.info("County (P2) = %r  score=%d", n2, s2)
+                        result.update(detected=True, name=n2,
+                                      fuzzy_score=s2, confidence=s2,
+                                      method="pro")
+                        return result, True
+            else:
+                log.debug("County: skipping Pass 2 — Flash returned 'not detected' "
+                          "and no structural anchor candidate")
 
         # -- Fallback: accept weaker structural anchor if above min threshold ----
         if anchor_name and anchor_score >= FUZZY_MATCH_THRESHOLD:

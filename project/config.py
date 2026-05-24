@@ -134,10 +134,16 @@ COUNTY_MAP_CLEAN_TO_ORIGINAL = {
 FUZZY_MATCH_THRESHOLD      = 72   # minimum score to record as detected
 RETRY_CONFIDENCE_THRESHOLD = 95   # auto-accept on Pass 1 if >= this
 
+LATLONG_REVIEW_BELOW       = 80   # latlong_confidence < this -> needs_review
 COUNTY_REVIEW_BELOW        = 86   # county_score < this -> needs_review
 GRID_REVIEW_BELOW          = 80   # grid_confidence < this -> needs_review
 LOCATION_REVIEW_BELOW      = 100  # any missing field (sec/twp/rng) -> needs_review
 DOT_REVIEW_BELOW           = 70   # dot_confidence < this -> needs_review
+
+# Minimum Tesseract word-count to consider a page "readable".
+# Pages below this threshold are almost certainly blank or handwritten beyond
+# what Tesseract can decode — skip the expensive grouping / Gemini step.
+ILLEGIBLE_WORD_THRESHOLD   = 15
 
 # -- Per-stage page caps -------------------------------------------------------
 # First-pass page limits (kept small to control API cost). Retry path uses
@@ -239,11 +245,15 @@ def decade_for(year: str | int | None) -> str:
 # Per-tier flags. Add knobs here as the pipeline grows; consumers should
 # look up via tier_for() then index this dict.
 TIER_CONFIG = {
-    TIER_EARLY:      {"run_latlong": False, "location_strategy": "str_keywords"},
-    TIER_TRANSITION: {"run_latlong": False, "location_strategy": "str_keywords"},
-    TIER_MID:        {"run_latlong": False, "location_strategy": "location_keyword"},
-    TIER_LATE:       {"run_latlong": True,  "location_strategy": "location_keyword"},
-    TIER_MODERN:     {"run_latlong": True,  "location_strategy": "location_keyword"},
+    # run_latlong:   decimal lat/lon was not printed on forms before late tier
+    # run_location:  STR section/township/range is handwritten on early/transition forms
+    #                and completely unreadable by Tesseract — skip to save 50-150s per record
+    # location_strategy: which extractor to use when run_location=True
+    TIER_EARLY:      {"run_latlong": False, "run_location": False, "location_strategy": "str_keywords"},
+    TIER_TRANSITION: {"run_latlong": False, "run_location": False, "location_strategy": "str_keywords"},
+    TIER_MID:        {"run_latlong": False, "run_location": True,  "location_strategy": "location_keyword"},
+    TIER_LATE:       {"run_latlong": True,  "run_location": True,  "location_strategy": "location_keyword"},
+    TIER_MODERN:     {"run_latlong": True,  "run_location": True,  "location_strategy": "location_keyword"},
 }
 
 # Keywords used by the new 'Location:' extractor in mid/late/modern tiers.

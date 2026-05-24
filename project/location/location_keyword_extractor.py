@@ -26,6 +26,7 @@ from config import (
     COUNTY_LIST_CLEAN,
     COUNTY_MAP_CLEAN_TO_ORIGINAL,
     FUZZY_MATCH_THRESHOLD,
+    ILLEGIBLE_WORD_THRESHOLD,
     LOCATION_LINE_KEYWORDS,
 )
 from ocr.vision_api import detect_text_with_vision
@@ -186,6 +187,14 @@ def process_single_location_keyword(
                 pil_image, manager=manager, page_num=page_num,
             )
             if not annotations:
+                continue
+
+            # Illegibility guard: fewer tokens than threshold means a blank or
+            # handwritten page — "Location:" keyword won't be found anyway.
+            word_count = len(annotations) - 1
+            if word_count < ILLEGIBLE_WORD_THRESHOLD:
+                log.debug("Page %d: only %d words — skipping (illegible)",
+                          page_num, word_count)
                 continue
 
             kw_box = _find_location_keyword_box(annotations,

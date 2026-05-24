@@ -22,7 +22,7 @@ import boto3
 REGION         = "us-east-1"
 ACCOUNT_ID     = "225989338968"
 ECR_REPO       = f"{ACCOUNT_ID}.dkr.ecr.{REGION}.amazonaws.com/osu-pipeline"
-NEW_IMAGE_TAG  = "v15-skip-anchor"
+NEW_IMAGE_TAG  = "v16-review-queue"
 PROJECT_ROOT   = Path(__file__).parent.parent   # D:\project_modular
 SOURCE_BUCKET  = f"osu-pipeline-results"        # reuse existing bucket
 SOURCE_KEY     = "codebuild/source.zip"

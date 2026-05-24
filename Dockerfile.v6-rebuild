@@ -1,8 +1,8 @@
 # Build from Python slim base — includes pip + essential tools
 FROM python:3.10-slim as builder
 
-LABEL org.opencontainers.image.title="osu-well-pipeline-v12" \
-      org.opencontainers.image.description="Oklahoma well-record PDF processing pipeline — county/dot exception fixes, pinned PyTorch 2.3"
+LABEL org.opencontainers.image.title="osu-well-pipeline" \
+      org.opencontainers.image.description="Oklahoma well-record PDF processing pipeline — see ECR tag for version"
 
 WORKDIR /app
 

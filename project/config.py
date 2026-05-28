@@ -19,10 +19,12 @@ if not os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
             os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(_candidates[0])
 
 # -- Models --------------------------------------------------------------------
-# Override via env vars for cost control (e.g. GEMINI_PRO_MODEL=gemini-2.5-flash
-# to avoid Pro quota issues on free-tier GCP projects).
-MODEL_FLASH_NAME = os.environ.get("GEMINI_FLASH_MODEL", "gemini-2.5-flash")
-MODEL_PRO_NAME   = os.environ.get("GEMINI_PRO_MODEL",   "gemini-2.5-flash")  # default to flash — Pro has 0 free-tier quota
+# gemini-2.0-flash-lite: best free-tier model (30 RPM, fast, cheap).
+# Override via env vars: GEMINI_FLASH_MODEL / GEMINI_PRO_MODEL.
+# Both default to flash-lite — Pro has 0 free-tier quota and is unnecessary
+# for county classification (simple 77-class task).
+MODEL_FLASH_NAME = os.environ.get("GEMINI_FLASH_MODEL", "gemini-3.1-flash-lite")
+MODEL_PRO_NAME   = os.environ.get("GEMINI_PRO_MODEL",   "gemini-3.1-flash-lite")
 
 # -- Source / Output Paths -----------------------------------------------------
 # Override with environment variables for cloud / Docker deployments.

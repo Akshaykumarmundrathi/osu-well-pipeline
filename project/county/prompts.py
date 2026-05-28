@@ -17,27 +17,22 @@ from config import (
 
 log = logging.getLogger(__name__)
 
-_county_list_str  = ", ".join(f"'{c}'" for c in COUNTY_LIST_CLEAN)
-_county_full_str  = ", ".join(f"'{n}'" for n in VALID_COUNTY_LIST_ORIGINAL)
+# Compact county lists — used in prompts below.
+_county_list_str  = ", ".join(COUNTY_LIST_CLEAN)          # base names, no quotes
+_county_full_str  = ", ".join(VALID_COUNTY_LIST_ORIGINAL) # full names, no quotes
 
-prompt_pass1 = f"""Analyze this image snippet from an Oklahoma well record form.
+# ---------------------------------------------------------------------------
+# Prompts — kept minimal to reduce input tokens.
+# max_output_tokens=20 caps the response (county name ≤ 3 words + punctuation).
+# ---------------------------------------------------------------------------
 
-Find the Oklahoma county base name next to the word 'County'.
+prompt_pass1 = f"""Oklahoma well record image. Find the county base name next to "County".
+Valid: {_county_list_str}
+Reply with ONLY the base name in lowercase (e.g. creek). If absent: Not detected."""
 
-Valid base names: {_county_list_str}
-
-Respond ONLY with the matching base name in lowercase (e.g. "creek", "okmulgee").
-If nothing matches, respond ONLY with: Not detected."""
-
-prompt_pass2 = f"""Analyze this image snippet from an Oklahoma well record form.
-
-Identify the most likely Oklahoma county name shown.
-
-Valid county names: {_county_full_str}
-
-Respond ONLY with the best candidate using standard capitalization
-(e.g. "Creek County", "Okmulgee County").
-If nothing matches, respond ONLY with: Not detected."""
+prompt_pass2 = f"""Oklahoma well record image. Identify the county name.
+Valid: {_county_full_str}
+Reply with ONLY the county name (e.g. Creek County). If absent: Not detected."""
 
 
 # ---------------------------------------------------------------------------
@@ -274,5 +269,10 @@ def setup_gemini():
 
     flash = genai.GenerativeModel(MODEL_FLASH_NAME)
     pro   = genai.GenerativeModel(MODEL_PRO_NAME)
-    gen_config = genai.types.GenerationConfig(candidate_count=1, temperature=0.0)
+    # max_output_tokens=20: county names are ≤ 3 words; caps billing on output side.
+    gen_config = genai.types.GenerationConfig(
+        candidate_count=1,
+        temperature=0.0,
+        max_output_tokens=20,
+    )
     return flash, pro, gen_config

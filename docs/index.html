@@ -334,36 +334,7 @@
 // ─── Config ───────────────────────────────────────────────────────────────────
 const INLINE_GEOJSON = null;
 const DATA_URL = './data/well_locations.json';
-async function loadData() {
-  const detail = document.getElementById('load-detail');
-  try {
-    detail.textContent = 'Loading inline well location data...';
-    const geojson = INLINE_GEOJSON;
-    allFeatures = geojson.features || [];
-    if (geojson.generated)
-      document.getElementById('data-updated').textContent = new Date(geojson.generated).toLocaleString();
-    detail.textContent = 'Rendering ' + allFeatures.length.toLocaleString() + ' well markers...';
-    populateDropdowns(allFeatures);
-    buildLegend();
-    buildCountyList(allFeatures);
-    updateStats(allFeatures);
-    renderMarkers(allFeatures);
-    if (allFeatures.length > 0) {
-      const lats = allFeatures.map(f => f.geometry.coordinates[1]);
-      const lons = allFeatures.map(f => f.geometry.coordinates[0]);
-      map.fitBounds([
-        [Math.min(...lats)-0.3, Math.min(...lons)-0.3],
-        [Math.max(...lats)+0.3, Math.max(...lons)+0.3]
-      ], {padding:[20,20]});
-    }
-    const loading = document.getElementById('loading');
-    loading.style.opacity = '0';
-    setTimeout(() => loading.style.display = 'none', 400);
-  } catch(err) {
-    console.error(err);
-    document.getElementById('load-detail').innerHTML = '<strong style=color:#f87171>Error: ' + err.message + '</strong>';
-  }
-}
+// loadData defined below (fetch from DATA_URL with null-INLINE_GEOJSON support)
 
 // Decade → bright color, visible on BOTH satellite and dark backgrounds
 const DECADE_COLORS = {
@@ -713,7 +684,7 @@ async function loadData() {
       detail.textContent = "Loading embedded well data...";
       geojson = INLINE_GEOJSON;
     } else {
-      detail.textContent = "Connecting to AWS S3...";
+      detail.textContent = "Loading well location data...";
       const resp = await fetch(DATA_URL);
       if (!resp.ok) throw new Error(`HTTP ${resp.status} — ${resp.statusText}`);
       detail.textContent = "Parsing well location data...";

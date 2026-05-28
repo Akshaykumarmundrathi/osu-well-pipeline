@@ -25,6 +25,7 @@ credentials/
 *.key
 *.json
 !aws/config/*.json
+!docs/data/*.json
 # Explicit protection against service account keys
 *service*account*.json
 *gcp*.json

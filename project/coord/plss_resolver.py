@@ -64,11 +64,9 @@ def _require_env(name: str) -> str:
         )
     return v
 
-_RDS_HOST     = os.environ.get("RDS_HOST", "")
-_RDS_PORT     = int(os.environ.get("RDS_PORT", "5432"))
-_RDS_DBNAME   = os.environ.get("RDS_DBNAME",   "")
-_RDS_USER     = os.environ.get("RDS_USER",     "")
-_RDS_PASSWORD = os.environ.get("RDS_PASSWORD", "")
+# RDS credentials are read at connection time inside PLSSResolver._connect(),
+# not here at import time, so that secrets loaded from Secrets Manager (or
+# .env) after this module is imported are always picked up correctly.
 
 GRID_SIZE = 8
 

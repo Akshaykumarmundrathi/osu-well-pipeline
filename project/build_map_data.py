@@ -41,8 +41,14 @@ from pathlib import Path
 from urllib.parse import quote as _urlquote
 
 # ── Defaults ───────────────────────────────────────────────────────────────────
-_DEFAULT_OUTPUT = Path(r"D:\project_outputs_local")
-_DEFAULT_REPO   = Path(r"D:\project_modular")
+_DEFAULT_OUTPUT = Path(os.environ.get(
+    "OUTPUT_ROOT",
+    str(Path(__file__).parent.parent / "project_outputs_local"),
+))
+_DEFAULT_REPO = Path(os.environ.get(
+    "REPO_ROOT",
+    str(Path(__file__).parent.parent),
+))
 
 # Oklahoma bounding box (generous)
 _LAT_MIN, _LAT_MAX = 33.5, 37.1

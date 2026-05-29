@@ -23,8 +23,8 @@ if not os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
 # Override via env vars: GEMINI_FLASH_MODEL / GEMINI_PRO_MODEL.
 # Both default to flash-lite — Pro has 0 free-tier quota and is unnecessary
 # for county classification (simple 77-class task).
-MODEL_FLASH_NAME = os.environ.get("GEMINI_FLASH_MODEL", "gemini-3.1-flash-lite")
-MODEL_PRO_NAME   = os.environ.get("GEMINI_PRO_MODEL",   "gemini-3.1-flash-lite")
+MODEL_FLASH_NAME = os.environ.get("GEMINI_FLASH_MODEL", "gemini-2.0-flash-lite")
+MODEL_PRO_NAME   = os.environ.get("GEMINI_PRO_MODEL",   "gemini-2.0-flash-lite")
 
 # -- Source / Output Paths -----------------------------------------------------
 # Override with environment variables for cloud / Docker deployments.

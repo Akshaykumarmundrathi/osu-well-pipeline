@@ -9,7 +9,13 @@ don't produce a clean binary mask.
 All functions return (cropped_image | None, (x, y, w, h) | None).
 """
 
-import cv2
+try:
+    import cv2
+except ImportError as _cv2_err:
+    raise ImportError(
+        "OpenCV (cv2) is required for grid detection. "
+        "Install it with: pip install opencv-python-headless"
+    ) from _cv2_err
 import numpy as np
 
 _BUFFER = 5   # pixels added around bbox when cropping

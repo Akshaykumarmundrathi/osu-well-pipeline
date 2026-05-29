@@ -24,16 +24,28 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 # -- Config --------------------------------------------------------------------
+# Override with environment variables so this script works on any machine or
+# inside a CI container.  On the local Windows workstation the D:\ defaults
+# remain valid as long as the env vars are not set.
 
-SMOKE_ROOT    = Path(r"D:\project_outputs\smoke_test")
-INDEX_PATH    = SMOKE_ROOT / "smoke_index.csv"
+SMOKE_ROOT = Path(os.environ.get(
+    "SMOKE_ROOT",
+    str(Path(__file__).parent.parent / "smoke_test_output"),
+))
+INDEX_PATH = SMOKE_ROOT / "smoke_index.csv"
+
+# COLLECTION_BASE points at the *parent* of the ExportedFolderContents dirs.
+# Set COLLECTION_BASE=D:\ on Windows or /mnt/data on Linux/WSL.
+_CB = Path(os.environ.get("COLLECTION_BASE", r"D:\\"))
 COLLECTION_ROOTS = {
-    1:  Path(r"D:\ExportedFolderContents (1)"),
-    7:  Path(r"D:\ExportedFolderContents (7)"),
-    9:  Path(r"D:\ExportedFolderContents (9)"),
-    11: Path(r"D:\ExportedFolderContents (11)"),
-    13: Path(r"D:\ExportedFolderContents (13)"),
+    1:  _CB / "ExportedFolderContents (1)",
+    7:  _CB / "ExportedFolderContents (7)",
+    9:  _CB / "ExportedFolderContents (9)",
+    11: _CB / "ExportedFolderContents (11)",
+    13: _CB / "ExportedFolderContents (13)",
 }
+# Collections whose root dirs are absent are skipped gracefully at index-build time.
+
 PER_COLLECTION = 20   # 5 tiers x 20 = 100 total
 RANDOM_SEED    = 42
 

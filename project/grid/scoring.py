@@ -29,7 +29,13 @@ import os
 import signal
 from pathlib import Path
 
-import cv2
+try:
+    import cv2
+except ImportError as _cv2_err:
+    raise ImportError(
+        "OpenCV (cv2) is required for grid detection. "
+        "Install it with: pip install opencv-python-headless"
+    ) from _cv2_err
 
 from config import (
     GRID_H_LOOSE, GRID_H_STRICT,

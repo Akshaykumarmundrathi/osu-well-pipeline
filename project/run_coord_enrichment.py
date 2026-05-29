@@ -8,14 +8,14 @@ every dot-detected well.
 
 How it works
 ------------
-1. Reads D:\\project_outputs_local\\processing_status.csv
+1. Reads <OUTPUT_ROOT>/processing_status.csv  (default: project_outputs_local/)
 2. Normalises column names to match coord_enricher expectations
 3. For each dot-detected record:
      a. Looks up Section/Township/Range in plss_grid (RDS)
      b. Finds the exact 8x8 grid cell via dot_nw label (e.g. "SW-NW-NE")
      c. Bilinear-interpolates using (dot_x_norm, dot_y_norm) -> exact lat/lon
 4. Validates against county_name for sanity
-5. Writes outputs to D:\\project_outputs_local\\
+5. Writes outputs to <OUTPUT_ROOT>/
 
 Two-pass enrichment
 -------------------
@@ -45,7 +45,7 @@ Add to your .env file (C:\\Users\\akshay\\Downloads\\project_modular\\.env):
 Usage
 -----
   python run_coord_enrichment.py
-  python run_coord_enrichment.py --output D:\\project_outputs_local
+  python run_coord_enrichment.py --output /path/to/project_outputs_local
   python run_coord_enrichment.py --year 1913     # single year only
   python run_coord_enrichment.py --dry-run       # test DB connection only
   python run_coord_enrichment.py --all-dot-done  # bypass review gate
@@ -84,7 +84,10 @@ if _ENV_PATH.exists():
 # Make D:\project_modular\project importable (coord + ocr modules live there)
 # Override via env var D_PROJECT_ROOT if repo is on a different drive/path.
 # ---------------------------------------------------------------------------
-_D_PROJECT = Path(os.environ.get("D_PROJECT_ROOT", r"D:\project_modular\project"))
+_D_PROJECT = Path(os.environ.get(
+    "D_PROJECT_ROOT",
+    str(Path(__file__).parent),   # default: same directory as this script
+))
 if _D_PROJECT.exists() and str(_D_PROJECT) not in sys.path:
     sys.path.insert(0, str(_D_PROJECT))
 
@@ -138,7 +141,10 @@ def _xynorm_to_quad(x_norm: str, y_norm: str) -> str:
         return ""
 
 
-_DEFAULT_OUTPUT = r"D:\project_outputs_local"
+_DEFAULT_OUTPUT = os.environ.get(
+    "OUTPUT_ROOT",
+    str(Path(__file__).parent.parent / "project_outputs_local"),
+)
 _REVIEW_CSV     = "manual_review_results.csv"
 
 
@@ -333,7 +339,7 @@ def run(output_root: Path, year_filter: int | None, dry_run: bool,
         from coord.coord_enricher import enrich_with_coordinates
     except ImportError as e:
         print(f"\nERROR: Cannot import coord module from {_D_PROJECT}: {e}")
-        print("Make sure D:\\project_modular\\project exists and contains coord/")
+        print(f"Make sure {_D_PROJECT} exists and contains coord/ (override with D_PROJECT_ROOT env var)")
         sys.exit(1)
 
     status_csv = output_root / "processing_status.csv"
@@ -511,7 +517,7 @@ def main():
         description="Resolve dot positions to lat/lon via PLSS RDS database"
     )
     ap.add_argument("--output",   default=_DEFAULT_OUTPUT,
-                    help="Pipeline output root (default: D:\\project_outputs_local)")
+                    help="Pipeline output root (default: OUTPUT_ROOT env var or project_outputs_local/)")
     ap.add_argument("--year",     type=int, default=None,
                     help="Process a single year only (e.g. 1913)")
     ap.add_argument("--dry-run",  action="store_true",

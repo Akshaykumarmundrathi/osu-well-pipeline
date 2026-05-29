@@ -55,15 +55,16 @@ from ocr.vision_api import get_page_annotations
 from pdf.pdf_manager import PDFDocumentManager
 
 _METHODS = [
-    extract_grid_region_adaptive,
-    extract_grid_region_otsu,
-    extract_grid_region_canny,
-    extract_grid_region_hough,
-    extract_grid_region_rotated,
-    extract_grid_region_corners,
+    ("adaptive", extract_grid_region_adaptive),
+    ("otsu",     extract_grid_region_otsu),
+    ("canny",    extract_grid_region_canny),
+    ("hough",    extract_grid_region_hough),
+    ("rotated",  extract_grid_region_rotated),
+    ("corners",  extract_grid_region_corners),
 ]
 
-_AR_MIN, _AR_MAX = 0.85, 1.15   # square-ish aspect ratio
+_AR_MIN, _AR_MAX    = 0.78, 1.30   # accept slightly landscape / portrait grids
+_MIN_LINE_DENSITY   = 0.15         # fraction of H/V-line pixels that a real grid must have
 
 # Per-page wall-clock timeout.  Tesseract on noisy 1900s handwriting can spin
 # for many minutes; SIGALRM gives us a hard ceiling.  No-op on Windows.
@@ -79,15 +80,50 @@ def _sigalrm_handler(signum, frame):
     raise _GridPageTimeout(f"grid page timed out after {_PAGE_TIMEOUT_S}s")
 
 
+def _line_density_score(region_bgr) -> float:
+    """
+    Measures how much of a candidate region consists of horizontal and
+    vertical line structure — the hallmark of a printed grid.
+
+    Text bands score near 0.  A proper H×V grid scores 0.15+.
+    Returns a float in [0, 1].
+
+    Algorithm: Otsu-binarise → morphological OPEN with wide H kernel
+    (extracts horizontal runs) + tall V kernel (extracts vertical runs).
+    Sum both, normalise by total pixels.
+    """
+    gray = cv2.cvtColor(region_bgr, cv2.COLOR_BGR2GRAY)
+    gray = cv2.GaussianBlur(gray, (3, 3), 0)
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    H, W = binary.shape
+    if H < 10 or W < 10:
+        return 0.0
+
+    hk = cv2.getStructuringElement(cv2.MORPH_RECT, (max(20, W // 8), 1))
+    vk = cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(20, H // 8)))
+    hl = cv2.morphologyEx(binary, cv2.MORPH_OPEN, hk)
+    vl = cv2.morphologyEx(binary, cv2.MORPH_OPEN, vk)
+
+    total_pixels = 255 * H * W + 1          # +1 avoids div-by-zero
+    h_pct = hl.sum() / total_pixels
+    v_pct = vl.sum() / total_pixels
+    return float(min(1.0, (h_pct + v_pct) * 20))
+
+
 def _extract_best_candidate(cv_image, w_min, w_max, h_min, h_max):
     """
     Run all six CV extractors against `cv_image`. Keep candidates whose
-    width/height fall in [w_min..w_max] x [h_min..h_max] and whose aspect
-    ratio is roughly square. Return the largest such candidate as
-    (grid_img, (x, y, w, h), method_name) or (None, None, None).
+    width/height fall in [w_min..w_max] x [h_min..h_max], whose aspect
+    ratio is in [_AR_MIN.._AR_MAX], and whose line-density score is at
+    least _MIN_LINE_DENSITY (rejects text bands that look rectangular but
+    contain no grid lines).
+
+    Ranking: density first (morphological H/V line fraction), area as
+    tiebreaker.  Returns (grid_img, (x, y, w, h), method_name) or
+    (None, None, None).
     """
     candidates = []
-    for func in _METHODS:
+    for name, func in _METHODS:
         try:
             grid_img, bbox = func(cv_image)
         except Exception:
@@ -99,15 +135,19 @@ def _extract_best_candidate(cv_image, w_min, w_max, h_min, h_max):
             continue
         ar   = w / h if h > 0 else 0
         area = w * h
-        if (_AR_MIN <= ar <= _AR_MAX
+        if not (_AR_MIN <= ar <= _AR_MAX
                 and w_min <= w <= w_max
                 and h_min <= h <= h_max
                 and area >= w_min * h_min):
-            candidates.append({"method": func.__name__, "region": grid_img,
-                               "bbox": bbox, "area": area})
+            continue
+        density = _line_density_score(grid_img)
+        if density < _MIN_LINE_DENSITY:
+            continue
+        candidates.append({"method": name, "region": grid_img,
+                           "bbox": bbox, "area": area, "density": density})
     if not candidates:
         return None, None, None
-    best = max(candidates, key=lambda c: c["area"])
+    best = max(candidates, key=lambda c: (c["density"], c["area"]))
     return best["region"], best["bbox"], best["method"]
 
 
@@ -237,12 +277,14 @@ def process_single_grid(
             out_path = output_dir / f"{pdf_stem}_page_{page_num:02d}_grid.png"
             cv2.imwrite(str(out_path), grid_img)
 
-            x, y, w, h = bbox
-            ar   = w / h if h > 0 else 0
-            conf = max(0, 100 - int(abs(1.0 - ar) * 100))
+            # Confidence based on morphological line-density score (0–1 → 0–100).
+            # Line density is a much stronger signal than aspect-ratio deviation:
+            # text blocks score ~0, proper H×V grids score 0.15+.
+            density = _line_density_score(grid_img)
+            conf    = min(100, int(density * 100))
 
-            log.info("Grid -- page %d  method=%s  bbox=%s  conf=%d  mode=%s",
-                     page_num, method, bbox, conf, mode)
+            log.info("Grid -- page %d  method=%s  bbox=%s  density=%.3f  conf=%d  mode=%s",
+                     page_num, method, bbox, density, conf, mode)
             result.update(detected=True, page=page_num, bbox=list(bbox),
                           method=method, confidence=conf,
                           image_path=str(out_path))

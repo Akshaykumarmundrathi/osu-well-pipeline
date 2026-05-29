@@ -71,6 +71,43 @@ except ImportError:
         return "", 0
 
 
+from config import VALID_COUNTY_LIST_ORIGINAL as _COUNTY_FULL_LIST
+
+
+def _parse_county_full_response(text: str) -> tuple[str, int]:
+    """
+    Enhanced county response parser — ported from original
+    parse_county_response_fuzzy_v2() in OSU_WELL_CHECKPOINT1.py.
+
+    Handles verbose Gemini Pro responses like
+    "Based on the text, this appears to be Creek County" where a simple
+    base-name fuzzy match on the whole string would fail.
+
+    Priority:
+      1. Exact full-name match (score 100)
+      2. Word-boundary containment check — longest names first (score 95)
+      3. Base-name fuzzy fallback via _fuzzy_match()
+    """
+    text = text.strip()
+    text_lower = text.lower()
+    if not text or any(p in text_lower for p in
+                       ("not detected", "none found", "no county", "n/a")):
+        return "", 0
+
+    # 1. Exact full-name match
+    for cname in _COUNTY_FULL_LIST:
+        if text.lower() == cname.lower():
+            return cname, 100
+
+    # 2. Containment check (longest names first so "Roger Mills" beats "Rogers")
+    for cname in sorted(_COUNTY_FULL_LIST, key=len, reverse=True):
+        if re.search(rf"\b{re.escape(cname)}\b", text, re.I):
+            return cname, 95
+
+    # 3. Base-name fuzzy match (existing logic)
+    return _fuzzy_match(text)
+
+
 # -- Gemini singleton ----------------------------------------------------------
 
 _GEMINI = None
@@ -253,7 +290,9 @@ def _try_page(
             raw2 = _gemini_call(pro, cfg, prompt_pass2, pil_image)
             result["pass2_result"] = raw2
             if raw2.lower() != "not detected.":
-                n2, s2 = _fuzzy_match(raw2)
+                # Use enhanced parser for Pro: handles "Creek County" inside
+                # verbose responses (ported from parse_county_response_fuzzy_v2).
+                n2, s2 = _parse_county_full_response(raw2)
                 if n2 and s2 >= FUZZY_MATCH_THRESHOLD:
                     result.update(detected=True, name=n2,
                                   fuzzy_score=s2, confidence=s2,
@@ -261,6 +300,7 @@ def _try_page(
                     return result, True
         else:
             # -- Pass 1 (Flash) on the crop ----------------------------------
+            # Flash prompt asks for base name only → use base-name fuzzy match.
             raw1 = _gemini_call(flash, cfg, prompt_pass1, crop)
             result["pass1_result"] = raw1
             p1_not_found = raw1.lower().strip() in ("not detected.", "not detected", "")
@@ -282,7 +322,9 @@ def _try_page(
                 raw2 = _gemini_call(pro, cfg, prompt_pass2, crop)
                 result["pass2_result"] = raw2
                 if raw2.lower().strip() not in ("not detected.", "not detected", ""):
-                    n2, s2 = _fuzzy_match(raw2)
+                    # Pro prompt asks for full name → use enhanced parser with
+                    # word-boundary containment check (handles verbose responses).
+                    n2, s2 = _parse_county_full_response(raw2)
                     if n2 and s2 >= FUZZY_MATCH_THRESHOLD:
                         log.info("County (P2) = %r  score=%d", n2, s2)
                         result.update(detected=True, name=n2,

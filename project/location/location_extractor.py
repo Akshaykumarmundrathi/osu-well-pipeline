@@ -21,6 +21,18 @@ import logging
 import re
 from pathlib import Path
 
+try:
+    import numpy as _np
+except ImportError:
+    _np = None
+
+try:
+    from PIL import ImageEnhance as _PILEnhance
+    from PIL import Image as _PIL
+except ImportError:
+    _PILEnhance = None
+    _PIL = None
+
 from config import (
     ILLEGIBLE_WORD_THRESHOLD,
     LOCATION_KEYWORDS, LOCATION_MIN_OVERLAP, LOCATION_MIN_OVERLAP_RETRY,
@@ -156,6 +168,88 @@ def _per_keyword_extract(annotations, keyword_boxes: dict, page_w: int,
     return sec, twp, rng
 
 
+# -- Gemini STR fallback (Strategy 3) -----------------------------------------
+# Mirrors the original phaseI.py / OSU_WELL_CHECKPOINT1.py approach:
+# preprocess the crop → send to Gemini Flash → parse structured response.
+# Activated only when OCR-regex and per-keyword extraction both yield < 2 fields.
+
+_STR_GEMINI_PROMPT = """\
+Oklahoma oil/gas well record image. Extract ONLY:
+
+- Section: <number 1-36, or Not detected>
+- Township: <number + N or S, e.g. 18N, or Not detected>
+- Range: <number + E or W, e.g. 8E, or Not detected>
+
+Examples
+  "Section 18  Township 21N  Range 8E"  →  Section: 18 / Township: 21N / Range: 8E
+  "Sec 5  T 25S  R 15E"                 →  Section: 5  / Township: 25S / Range: 15E
+
+Reply with ONLY the three dash-lines above, nothing else."""
+
+
+def _preprocess_for_gemini(pil_img):
+    """
+    Greyscale → contrast × 2 → brightness × 1.2 → binarize.
+    Matches the preprocessing in the original phaseI.py / checkpoint code.
+    Returns a PIL Image (grayscale binarized).
+    """
+    if _PILEnhance is None or _np is None:
+        return pil_img
+    try:
+        import cv2 as _cv2
+    except ImportError:
+        _cv2 = None
+    img = pil_img.convert("L")
+    img = _PILEnhance.Contrast(img).enhance(2.0)
+    img = _PILEnhance.Brightness(img).enhance(1.2)
+    if _cv2 is not None:
+        arr = _np.array(img)
+        _, arr = _cv2.threshold(arr, 128, 255, _cv2.THRESH_BINARY)
+        img = _PIL.fromarray(arr)
+    return img
+
+
+def _gemini_str_from_crop(pil_crop, logger) -> tuple[str, str, str]:
+    """
+    Send a preprocessed STR crop to Gemini Flash and extract
+    (section, township, range).
+
+    Returns ("", "", "") silently on any failure so the caller can decide
+    whether to accept the partial result or fall through to 'not_found'.
+    Requires GOOGLE_API_KEY; if unset the function returns empty strings
+    without raising.
+    """
+    try:
+        # Lazy import avoids circular deps and keeps startup fast.
+        from county.prompts import setup_gemini, _rate_limited_generate
+        flash, _, gen_cfg = setup_gemini()
+        img = _preprocess_for_gemini(pil_crop)
+        resp = _rate_limited_generate(flash, _STR_GEMINI_PROMPT, img, gen_cfg)
+        try:
+            raw = resp.text.strip() if (resp and hasattr(resp, "text")) else ""
+        except ValueError:
+            return "", "", ""
+
+        def _parse_field(pattern: str) -> str:
+            m = re.search(pattern, raw, re.I)
+            if not m:
+                return ""
+            v = m.group(1).strip()
+            return "" if "not" in v.lower() else v
+
+        sec = _validate_section(_parse_field(r"Section\s*[:\-]\s*([^\n/]+)"))
+        twp = _validate_twprng(_parse_field(r"Township\s*[:\-]\s*([^\n/]+)"))
+        rng = _validate_twprng(_parse_field(r"Range\s*[:\-]\s*([^\n/]+)"))
+        logger.info(
+            "Location Gemini fallback: sec=%r twp=%r rng=%r  (raw=%r)",
+            sec, twp, rng, raw[:80],
+        )
+        return sec, twp, rng
+    except Exception as exc:
+        logger.debug("Location Gemini fallback skipped: %s", exc)
+        return "", "", ""
+
+
 # -- Public entry point --------------------------------------------------------
 
 def process_single_location(
@@ -257,10 +351,30 @@ def process_single_location(
                 if not raw_text:
                     raw_text = f"sec={sec} twp={twp} rng={rng}"
 
+            # -- Strategy 3: Gemini on the crop (matches original phaseI.py) --
+            # When OCR regex + per-keyword both failed to yield ≥2 fields,
+            # send the binarized crop to Gemini Flash — same approach the
+            # original monolithic pipeline used before the modular rewrite.
+            # Only fires when a crop was found (Strategy 1 produced a bbox)
+            # and GOOGLE_API_KEY is configured.
+            if found < 2 and crop_box is not None:
+                g_sec, g_twp, g_rng = _gemini_str_from_crop(
+                    pil_image.crop(crop_box), log,
+                )
+                sec = sec or g_sec
+                twp = twp or g_twp
+                rng = rng or g_rng
+                found = sum(bool(v) for v in (sec, twp, rng))
+                if found > 0 and raw_text == "":
+                    raw_text = f"gemini: sec={sec} twp={twp} rng={rng}"
+
             if found < 2:
                 continue
 
-            conf = (found * 100) // 3
+            # Confidence: 3-strategy scoring.
+            # OCR regex (strat 1/2) → up to 100; Gemini fallback (strat 3) → 75 cap.
+            gemini_used = raw_text.startswith("gemini:")
+            conf = min(75, (found * 100) // 3) if gemini_used else (found * 100) // 3
 
             # Save crop + annotated page when we have a crop box.
             crop_path = ann_path = None

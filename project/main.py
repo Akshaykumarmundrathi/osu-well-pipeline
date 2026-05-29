@@ -57,30 +57,33 @@ log = get_logger(__name__)
 # -- Output CSV column lists ---------------------------------------------------
 
 _SUMMARY_FIELDS = [
+    # Identity
     "pdf_path", "pdf_stem", "collection", "year", "month",
-    "zip_path", "model_tier", "decade",
+    "zip_path", "model_tier",
+    # Lat/Lon
     "latlong_found", "lat", "lon", "latlong_confidence", "latlong_page",
-    "latlong_method", "latlong_form_type",
-    "header_county", "header_section", "header_township", "header_range",
-    "header_quad_raw", "header_quad_db", "header_feet",
-    "well_name", "well_type",
+    # Well identity
+    "well_name",
+    # Grid
     "grid_found", "grid_page", "grid_method", "grid_confidence", "grid_image_path",
+    # Location (Section / Township / Range)
     "location_found", "section", "township", "range", "location_confidence",
     "location_quadrant_pdf", "location_quadrant_db",
-    "location_quadrant_row", "location_quadrant_col", "location_quadrant_confidence",
+    # County
     "county_found", "county_name", "county_score", "county_confidence",
+    # Dot
     "dot_found", "dot_row", "dot_col", "dot_nw", "dot_confidence",
     "dot_x_norm", "dot_y_norm",
-    "final_status",      # 'success' | 'review' | 'failed'
-    "needs_review",      # True if any field below review threshold
-    "review_reasons",    # semicolon-joined list of weak signals
+    # Review flags
+    "final_status",   # 'success' | 'review' | 'failed'
+    "needs_review",   # True if any field below review threshold
+    "review_reasons", # semicolon-joined list of weak signals
+    # Per-stage status + error type
     "latlong_status", "grid_status", "location_status", "county_status", "dot_status",
     "latlong_error_type", "grid_error_type",
     "location_error_type", "county_error_type", "dot_error_type",
-    # End-to-end coordinate derivation audit
+    # Coordinate derivation summary
     "coord_derivation", "coord_latlong_source",
-    "coord_section_source", "coord_township_source", "coord_range_source",
-    "coord_county_used", "coord_dot_source",
 ]
 
 _DOT_FIELDS = [
@@ -493,59 +496,54 @@ def _row_to_summary_dict(row: dict, final_status: str,
     stem = row.get("pdf_stem", "")
     ll   = bool(row.get("latlong_lat")) and bool(row.get("latlong_lon"))
     return {
-        "pdf_path":            row.get("pdf_path", ""),
-        "pdf_stem":            stem,
-        "collection":          row.get("collection", ""),
-        "year":                row.get("year", ""),
-        "month":               row.get("month", ""),
-        "zip_path":            row.get("zip_path", ""),
-        "model_tier":          row.get("model_tier", ""),
-        "decade":              row.get("decade", ""),
-        "latlong_found":       ll,
-        "lat":                 row.get("latlong_lat", ""),
-        "lon":                 row.get("latlong_lon", ""),
-        "latlong_confidence":  row.get("latlong_confidence", ""),
-        "latlong_page":        row.get("latlong_page", ""),
-        "latlong_method":      row.get("latlong_method", ""),
-        "latlong_form_type":   row.get("latlong_form_type", ""),
-        "header_county":       row.get("header_county", ""),
-        "header_section":      row.get("header_section", ""),
-        "header_township":     row.get("header_township", ""),
-        "header_range":        row.get("header_range", ""),
-        "header_quad_raw":     row.get("header_quad_raw", ""),
-        "header_quad_db":      row.get("header_quad_db", ""),
-        "header_feet":         row.get("header_feet", ""),
-        "well_name":           _well_name_from_stem(stem),
-        "well_type":           row.get("latlong_well_type", ""),
-        "grid_found":          row.get("grid_status")     == DONE,
-        "grid_page":           row.get("grid_page", ""),
-        "grid_method":         row.get("grid_method", ""),
-        "grid_confidence":     row.get("grid_confidence", ""),
-        "location_found":               row.get("location_status") == DONE,
-        "section":                      row.get("location_section", ""),
-        "township":                     row.get("location_township", ""),
-        "range":                        row.get("location_range", ""),
-        "location_confidence":          row.get("location_confidence", ""),
-        "location_quadrant_pdf":        row.get("location_quadrant_pdf", ""),
-        "location_quadrant_db":         row.get("location_quadrant_db", ""),
-        "location_quadrant_row":        row.get("location_quadrant_row", ""),
-        "location_quadrant_col":        row.get("location_quadrant_col", ""),
-        "location_quadrant_confidence": row.get("location_quadrant_confidence", ""),
-        "county_found":        row.get("county_status")   == DONE,
-        "county_name":         row.get("county_name", ""),
-        "county_score":        row.get("county_score", ""),
-        "county_confidence":   row.get("county_confidence", ""),
-        "grid_image_path":     row.get("grid_image_path", ""),
-        "dot_found":           row.get("dot_status") == DONE,
-        "dot_row":             row.get("dot_row", ""),
-        "dot_col":             row.get("dot_col", ""),
-        "dot_nw":              row.get("dot_nw", ""),
-        "dot_confidence":      row.get("dot_confidence", ""),
-        "dot_x_norm":          row.get("dot_x_norm", ""),
-        "dot_y_norm":          row.get("dot_y_norm", ""),
-        "final_status":        final_status,
-        "needs_review":        final_status == "review",
-        "review_reasons":      "; ".join(reasons),
+        # Identity
+        "pdf_path":           row.get("pdf_path", ""),
+        "pdf_stem":           stem,
+        "collection":         row.get("collection", ""),
+        "year":               row.get("year", ""),
+        "month":              row.get("month", ""),
+        "zip_path":           row.get("zip_path", ""),
+        "model_tier":         row.get("model_tier", ""),
+        # Lat/Lon
+        "latlong_found":      ll,
+        "lat":                row.get("latlong_lat", ""),
+        "lon":                row.get("latlong_lon", ""),
+        "latlong_confidence": row.get("latlong_confidence", ""),
+        "latlong_page":       row.get("latlong_page", ""),
+        # Well identity
+        "well_name":          _well_name_from_stem(stem),
+        # Grid
+        "grid_found":         row.get("grid_status") == DONE,
+        "grid_page":          row.get("grid_page", ""),
+        "grid_method":        row.get("grid_method", ""),
+        "grid_confidence":    row.get("grid_confidence", ""),
+        "grid_image_path":    row.get("grid_image_path", ""),
+        # Location
+        "location_found":        row.get("location_status") == DONE,
+        "section":               row.get("location_section", ""),
+        "township":              row.get("location_township", ""),
+        "range":                 row.get("location_range", ""),
+        "location_confidence":   row.get("location_confidence", ""),
+        "location_quadrant_pdf": row.get("location_quadrant_pdf", ""),
+        "location_quadrant_db":  row.get("location_quadrant_db", ""),
+        # County
+        "county_found":      row.get("county_status") == DONE,
+        "county_name":       row.get("county_name", ""),
+        "county_score":      row.get("county_score", ""),
+        "county_confidence": row.get("county_confidence", ""),
+        # Dot
+        "dot_found":      row.get("dot_status") == DONE,
+        "dot_row":        row.get("dot_row", ""),
+        "dot_col":        row.get("dot_col", ""),
+        "dot_nw":         row.get("dot_nw", ""),
+        "dot_confidence": row.get("dot_confidence", ""),
+        "dot_x_norm":     row.get("dot_x_norm", ""),
+        "dot_y_norm":     row.get("dot_y_norm", ""),
+        # Review
+        "final_status":  final_status,
+        "needs_review":  final_status == "review",
+        "review_reasons": "; ".join(reasons),
+        # Per-stage status + error
         "latlong_status":      row.get("latlong_status", ""),
         "grid_status":         row.get("grid_status", ""),
         "location_status":     row.get("location_status", ""),
@@ -554,17 +552,79 @@ def _row_to_summary_dict(row: dict, final_status: str,
         "latlong_error_type":  row.get("latlong_error_type", ""),
         "grid_error_type":     row.get("grid_error_type", ""),
         "location_error_type": row.get("location_error_type", ""),
-        "county_error_type":     row.get("county_error_type", ""),
-        "dot_error_type":        row.get("dot_error_type", ""),
-        # Coordinate derivation audit
-        "coord_derivation":      row.get("coord_derivation", ""),
-        "coord_latlong_source":  row.get("coord_latlong_source", ""),
-        "coord_section_source":  row.get("coord_section_source", ""),
-        "coord_township_source": row.get("coord_township_source", ""),
-        "coord_range_source":    row.get("coord_range_source", ""),
-        "coord_county_used":     row.get("coord_county_used", ""),
-        "coord_dot_source":      row.get("coord_dot_source", ""),
+        "county_error_type":   row.get("county_error_type", ""),
+        "dot_error_type":      row.get("dot_error_type", ""),
+        # Coord derivation
+        "coord_derivation":     row.get("coord_derivation", ""),
+        "coord_latlong_source": row.get("coord_latlong_source", ""),
     }
+
+
+def _stage_quality_summary(status: "ProcessingStatus") -> None:
+    """
+    Print extraction quality metrics after all records are processed.
+
+    Shows:
+      • Full STR rate (section + township + range all present)
+      • Lat/Lon coverage
+      • Dot coverage
+      • Top 10 counties by occurrence
+      • Average confidence per stage (done records only)
+    """
+    rows = list(status._rows.values())
+    n    = len(rows)
+    if n == 0:
+        return
+
+    # STR completeness
+    str_full  = sum(1 for r in rows if r.get("location_section")
+                    and r.get("location_township") and r.get("location_range"))
+    str_any   = sum(1 for r in rows if r.get("location_section")
+                    or r.get("location_township") or r.get("location_range"))
+    # Lat/Lon
+    ll_found  = sum(1 for r in rows if r.get("latlong_lat") and r.get("latlong_lon"))
+    # Dot
+    dot_found = sum(1 for r in rows if r.get("dot_row") and r.get("dot_col"))
+
+    # County frequency
+    from collections import Counter
+    county_ctr: Counter = Counter(
+        r.get("county_name", "").strip()
+        for r in rows if r.get("county_name", "").strip()
+    )
+
+    # Avg confidence per stage (done only)
+    def _avg_conf(stage: str) -> str:
+        vals = []
+        for r in rows:
+            if r.get(f"{stage}_status") == DONE:
+                try:
+                    vals.append(float(r.get(f"{stage}_confidence", 0) or 0))
+                except (ValueError, TypeError):
+                    pass
+        return f"{sum(vals)/len(vals):.0f}" if vals else "—"
+
+    _p()
+    _p("  ── Extraction Quality ─────────────────────────────────────")
+    _p(f"  {'Lat/Lon':<20} {ll_found:>6,} / {n:,}  "
+       f"({100*ll_found//n if n else 0}%)")
+    _p(f"  {'Full STR':<20} {str_full:>6,} / {n:,}  "
+       f"({100*str_full//n if n else 0}%)")
+    _p(f"  {'Any STR field':<20} {str_any:>6,} / {n:,}  "
+       f"({100*str_any//n if n else 0}%)")
+    _p(f"  {'Dot detected':<20} {dot_found:>6,} / {n:,}  "
+       f"({100*dot_found//n if n else 0}%)")
+    _p()
+    _p("  ── Avg Confidence (done records) ──────────────────────────")
+    for s in ALL_STAGES:
+        lbl = _STAGE_LABEL.get(s, s)
+        _p(f"  {lbl:<20} {_avg_conf(s):>4}")
+    if county_ctr:
+        _p()
+        _p("  ── Top Counties ───────────────────────────────────────────")
+        for cname, cnt in county_ctr.most_common(10):
+            _p(f"  {cname:<25} {cnt:>6,}")
+    _p("  ───────────────────────────────────────────────────────────")
 
 
 def write_summary_csvs(status: ProcessingStatus, output_root: Path):
@@ -655,7 +715,7 @@ def write_latlong_csv(status: ProcessingStatus, output_path: Path):
                 "year":               row.get("year", ""),
                 "month":              row.get("month", ""),
                 "well_name":          _well_name_from_stem(stem),
-                "well_type":          row.get("latlong_well_type", ""),
+                "well_type":          "",
                 "lat":                row.get("latlong_lat", ""),
                 "lon":                row.get("latlong_lon", ""),
                 "latlong_confidence": row.get("latlong_confidence", ""),
@@ -1364,19 +1424,16 @@ def run_pipeline(args):
         f"({_cache_stats_before['size_mb']} MB)"
     )
 
-    # Init status — full traceability fields per record.
-    from config import decade_for, tier_for
+    # Init status — traceability fields per record.
+    from config import tier_for
     for r in records:
-        tier   = tier_for(r.collection_num)
-        decade = decade_for(r.year)
+        tier = tier_for(r.collection_num)
         status.init_record(
             r.pdf_stem, r.pdf_path,
             r.collection, r.year, r.month,
             zip_path=r.zip_path,
-            internal_path=r.internal_path,
             collection_num=r.collection_num,
             model_tier=tier,
-            decade=decade,
         )
     status.force_save()
 
@@ -1508,6 +1565,7 @@ def run_pipeline(args):
            f"skipped={c.get(SKIPPED,0):<7,}  "
            f"pending={c.get('pending',0):,}")
 
+    _stage_quality_summary(status)
     _p()
     write_summary_csvs(status, output_root)
     write_latlong_csv(status, output_root / "latlong_records.csv")

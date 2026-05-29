@@ -37,10 +37,10 @@ Reply with ONLY the county name (e.g. Creek County). If absent: Not detected."""
 
 # ---------------------------------------------------------------------------
 # Global rate limiter — enforces min gap between Gemini API calls.
-# GEMINI_MIN_CALL_GAP_S env var: default 2s (paid project); set higher
-# for free-tier (6s = 10 RPM limit).
+# GEMINI_MIN_CALL_GAP_S env var: default 3s (free tier ≈ 20 RPM effective).
+# Set to 2.0 on a paid project, or 6.0 if hitting 429s frequently.
 # ---------------------------------------------------------------------------
-_CALL_GAP  = float(os.environ.get("GEMINI_MIN_CALL_GAP_S", "2.0"))
+_CALL_GAP  = float(os.environ.get("GEMINI_MIN_CALL_GAP_S", "3.0"))
 _rate_lock = threading.Lock()
 _last_call = 0.0
 

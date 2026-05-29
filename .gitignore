@@ -71,6 +71,12 @@ aws/build/
 *.pdf
 *.lnk
 
+### Dev QA outputs (debug PNGs + labeled CSVs from inspect_grids.py)
+outputs_1911/debug/
+outputs_1911/grids/
+# Keep outputs_1911/results.csv and outputs_1911/inspection.csv (hand labels — worth tracking)
+# To commit the labeled data: git add -f outputs_1911/results.csv outputs_1911/inspection.csv
+
 ### IDE
 .vscode/
 .idea/

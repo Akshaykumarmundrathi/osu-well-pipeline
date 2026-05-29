@@ -1,16 +1,23 @@
 """
 Per-record, per-stage processing tracker backed by a CSV file.
 
-Schema (one row per PDF):
-  pdf_stem | pdf_path | collection | year | month |
-  grid_status | grid_confidence | grid_page | grid_method |
-  location_status | location_confidence | location_section | location_township | location_range |
-  county_status | county_confidence | county_name | county_score |
-  last_updated
+Schema (44 columns, one row per PDF):
+
+  Identity      : pdf_stem, pdf_path, zip_path, collection, collection_num, year, month, model_tier
+  Lat/Lon stage : latlong_status, latlong_confidence, latlong_error_type, latlong_lat, latlong_lon, latlong_page
+  Grid stage    : grid_status, grid_confidence, grid_error_type, grid_page, grid_method, grid_image_path
+  Location stage: location_status, location_confidence, location_error_type,
+                  location_section, location_township, location_range,
+                  location_quadrant_pdf, location_quadrant_db
+  County stage  : county_status, county_confidence, county_error_type, county_name, county_score
+  Dot stage     : dot_status, dot_confidence, dot_error_type,
+                  dot_row, dot_col, dot_nw, dot_x_norm, dot_y_norm
+  Coord audit   : coord_derivation, coord_latlong_source
+  Housekeeping  : last_updated
 
 Status values: pending | done | failed | skipped
 
-Saves are batched (SAVE_INTERVAL updates) to avoid O(n^2) I/O on large runs.
+Saves are batched (SAVE_INTERVAL updates) to avoid O(n²) I/O on large runs.
 Call force_save() at month/year boundaries and on process exit.
 """
 
@@ -30,44 +37,30 @@ SKIPPED = "skipped"
 SAVE_INTERVAL = 25  # rewrite CSV after this many mark_done/mark_failed calls
 
 _FIELDNAMES = [
-    # Identity / traceability — enough to reconstruct the source path on any system
-    "pdf_stem", "pdf_path", "zip_path", "internal_path",
-    "collection", "collection_num", "year", "month",
-    "model_tier", "decade",
-    # latlong (first stage)
+    # Identity / traceability
+    "pdf_stem", "pdf_path", "zip_path",
+    "collection", "collection_num", "year", "month", "model_tier",
+    # latlong stage
     "latlong_status", "latlong_confidence", "latlong_error_type",
-    "latlong_lat", "latlong_lon", "latlong_well_type", "latlong_page",
-    # latlong audit — how it was extracted
-    "latlong_method", "latlong_form_type",
-    # Location: header block fields (Form 1002A / Locate Well)
-    "header_county", "header_section", "header_township", "header_range",
-    "header_quad_raw", "header_quad_type", "header_quad_db",
-    "header_quad_row", "header_quad_col",
-    "header_feet", "header_rel_x", "header_rel_y",
-    # grid
+    "latlong_lat", "latlong_lon", "latlong_page",
+    # grid stage
     "grid_status",     "grid_confidence",  "grid_error_type",
     "grid_page",       "grid_method",      "grid_image_path",
-    # location
+    # location stage (Section / Township / Range)
     "location_status", "location_confidence", "location_error_type",
     "location_section", "location_township", "location_range",
     "location_quadrant_pdf", "location_quadrant_db",
-    "location_quadrant_row", "location_quadrant_col",
-    "location_quadrant_confidence",
-    # county
+    # county stage
     "county_status",   "county_confidence", "county_error_type",
     "county_name",     "county_score",
-    # dot (U-Net well-spot detection on grid image)
+    # dot stage (U-Net well-spot on grid image)
     "dot_status",      "dot_confidence",    "dot_error_type",
     "dot_row",         "dot_col",           "dot_nw",
     "dot_x_norm",      "dot_y_norm",
-    # end-to-end coordinate derivation audit
-    "coord_derivation",        # latlong_direct|dot_interpolation|not_resolved
-    "coord_latlong_source",    # labeled_decimal|dms|unlabeled_decimal|form_1002a|""
-    "coord_section_source",    # header_block|ocr_extracted|not_found
-    "coord_township_source",   # header_block|ocr_extracted|inferred|not_found
-    "coord_range_source",      # header_block|ocr_extracted|inferred|not_found
-    "coord_county_used",       # which county string was used for RDS resolution
-    "coord_dot_source",        # unet|ocr_quadrant|both|not_found
+    # coordinate derivation summary
+    "coord_derivation",      # latlong_direct|dot_interpolation|not_resolved
+    "coord_latlong_source",  # labeled_decimal|dms|unlabeled_decimal|""
+    # housekeeping
     "last_updated",
 ]
 
@@ -192,40 +185,35 @@ class ProcessingStatus:
 
     def init_record(self, pdf_stem: str, pdf_path: str,
                     collection: str = "", year: str = "", month: str = "",
-                    zip_path: str = "", internal_path: str = "",
-                    collection_num: int = 0,
-                    model_tier: str = "", decade: str = ""):
+                    zip_path: str = "", collection_num: int = 0,
+                    model_tier: str = ""):
         """Create a PENDING row for `pdf_stem` if it doesn't already exist."""
         with self._lock:
             self._init_record_locked(pdf_stem, pdf_path, collection, year, month,
-                                     zip_path, internal_path, collection_num,
-                                     model_tier, decade)
+                                     zip_path, collection_num, model_tier)
 
     def _init_record_locked(self, pdf_stem: str, pdf_path: str,
                             collection: str, year: str, month: str,
-                            zip_path: str, internal_path: str,
-                            collection_num: int, model_tier: str, decade: str):
+                            zip_path: str, collection_num: int, model_tier: str):
         """Inner implementation — must be called with self._lock held."""
         if pdf_stem in self._rows:
             return
         row = dict(_EMPTY_ROW)
         row.update({
-            "pdf_stem":      pdf_stem,
-            "pdf_path":      pdf_path,
-            "zip_path":      zip_path,
-            "internal_path": internal_path,
-            "collection":    collection,
+            "pdf_stem":       pdf_stem,
+            "pdf_path":       pdf_path,
+            "zip_path":       zip_path,
+            "collection":     collection,
             "collection_num": str(collection_num),
-            "year":          year,
-            "month":         month,
-            "model_tier":    model_tier,
-            "decade":        decade,
+            "year":           year,
+            "month":          month,
+            "model_tier":     model_tier,
             "latlong_status":  PENDING,
             "grid_status":     PENDING,
             "location_status": PENDING,
             "county_status":   PENDING,
             "dot_status":      PENDING,
-            "last_updated": _now(),
+            "last_updated":    _now(),
         })
         self._rows[pdf_stem] = row
 
@@ -240,24 +228,9 @@ class ProcessingStatus:
         extra: dict = {}
         if stage == "latlong":
             extra = {
-                "latlong_lat":        str(result.get("lat", "")),
-                "latlong_lon":        str(result.get("lon", "")),
-                "latlong_well_type":  result.get("well_type", ""),
-                "latlong_page":       str(result.get("page", "")),
-                "latlong_method":     result.get("latlong_method", ""),
-                "latlong_form_type":  result.get("latlong_form_type", ""),
-                "header_county":      result.get("header_county", ""),
-                "header_section":     result.get("header_section", ""),
-                "header_township":    result.get("header_township", ""),
-                "header_range":       result.get("header_range", ""),
-                "header_quad_raw":    result.get("header_quad_raw", ""),
-                "header_quad_type":   result.get("header_quad_type", ""),
-                "header_quad_db":     result.get("header_quad_db", ""),
-                "header_quad_row":    result.get("header_quad_row", ""),
-                "header_quad_col":    result.get("header_quad_col", ""),
-                "header_feet":        result.get("header_feet", ""),
-                "header_rel_x":       result.get("header_rel_x", ""),
-                "header_rel_y":       result.get("header_rel_y", ""),
+                "latlong_lat":  str(result.get("lat", "")),
+                "latlong_lon":  str(result.get("lon", "")),
+                "latlong_page": str(result.get("page", "")),
             }
         elif stage == "grid":
             extra = {
@@ -267,14 +240,11 @@ class ProcessingStatus:
             }
         elif stage == "location":
             extra = {
-                "location_section":              result.get("section", ""),
-                "location_township":             result.get("township", ""),
-                "location_range":                result.get("range", ""),
-                "location_quadrant_pdf":         result.get("quadrant_pdf", ""),
-                "location_quadrant_db":          result.get("quadrant_db", ""),
-                "location_quadrant_row":         result.get("quadrant_row", ""),
-                "location_quadrant_col":         result.get("quadrant_col", ""),
-                "location_quadrant_confidence":  str(result.get("quadrant_confidence", "")),
+                "location_section":      result.get("section", ""),
+                "location_township":     result.get("township", ""),
+                "location_range":        result.get("range", ""),
+                "location_quadrant_pdf": result.get("quadrant_pdf", ""),
+                "location_quadrant_db":  result.get("quadrant_db", ""),
             }
         elif stage == "county":
             extra = {
@@ -328,12 +298,7 @@ class ProcessingStatus:
         return self._rows.get(pdf_stem, {}).get(f"{stage}_error_type", "")
 
     def mark_coord_audit(self, pdf_stem: str, derivation: str,
-                         latlong_source: str = "",
-                         section_source: str = "",
-                         township_source: str = "",
-                         range_source: str = "",
-                         county_used: str = "",
-                         dot_source: str = ""):
+                         latlong_source: str = "", **_ignored):
         """
         Store end-to-end coordinate derivation provenance.
 
@@ -342,15 +307,13 @@ class ProcessingStatus:
           'dot_interpolation'   — derived via grid + dot + PLSS RDS
           'form_1002a_latlong'  — labeled coordinates on Form 1002A
           'not_resolved'        — coordinate could not be determined
+
+        Extra kwargs are accepted and silently ignored for backward compatibility
+        with callers that still pass section_source / county_used / etc.
         """
         self._update(pdf_stem, "coord", "", "", {
-            "coord_derivation":      derivation,
-            "coord_latlong_source":  latlong_source,
-            "coord_section_source":  section_source,
-            "coord_township_source": township_source,
-            "coord_range_source":    range_source,
-            "coord_county_used":     county_used,
-            "coord_dot_source":      dot_source,
+            "coord_derivation":     derivation,
+            "coord_latlong_source": latlong_source,
         })
 
     def latlong_detected(self, pdf_stem: str) -> bool:

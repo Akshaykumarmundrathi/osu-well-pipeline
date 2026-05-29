@@ -34,6 +34,10 @@ python scan_dataset.py --source D:\ --output D:\project_outputs\dataset_index.cs
 python scan_dataset.py --flat ..\pdfs
 python scan_dataset.py --summary
 python scan_dataset.py --validate
+
+# Dev / QA tools
+python run_1911.py                     # fast grid-only run on 1911 collection
+python inspect_grids.py                # tkinter GUI — label grid results Y/N/S
 ```
 
 ## Architecture
@@ -84,42 +88,68 @@ The manager is created **once per record** and passed to all three stage functio
 
 `ocr/preprocessing.py` and `ocr/vision_api.py` use `io.BytesIO` throughout. No `temp_image.png` or `preprocessed_image.png` are written to disk.
 
+## Dev / QA Tools
+
+| Script | Purpose |
+|---|---|
+| `run_1911.py` | Standalone grid runner for the 1911 collection — fast single-stage dev loop |
+| `inspect_grids.py` | tkinter GUI for manual Y/N/S labeling of grid PNGs; writes `inspection.csv` |
+| `outputs_1911/` | 100 hand-labeled QA results: `results.csv` (95/100 detected), `inspection.csv` (94/94 labeled CORRECT), debug PNGs, grid PNGs |
+| `smoke_test.py` | Multi-collection smoke test — runs a random sample per tier against local ZIPs |
+
 ## Key Constraints
 
-- **Google Cloud Vision API** credentials: set `GOOGLE_APPLICATION_CREDENTIALS` to the service account JSON (already wired in `config.py` relative to the project root: `../smiling-breaker-423712-h3-aff7ac746ad4.json`).
-- **Gemini API**: requires `GOOGLE_API_KEY` env var. County extraction silently skips the Gemini step if this is not set and `setup_gemini()` raises.
+- **Google Cloud Vision API** credentials: set `GOOGLE_APPLICATION_CREDENTIALS` to the service account JSON. Never commit the key file — use `.env` locally; Secrets Manager in Batch.
+- **Gemini API**: requires `GOOGLE_API_KEY` env var. County extraction silently skips the Gemini step if not set. Default rate limit: 3 s between calls (free tier). Override with `GEMINI_MIN_CALL_GAP_S`.
 - **rapidfuzz** is optional — county fuzzy matching falls back to `difflib` if not installed.
 - PDFs are expected to have ≤ 2 pages. Grid appears on one page only. County keyword search tries page 0 then page 1.
 - Grid detection size filter (`_W_MIN=280, _W_MAX=850` in `grid/scoring.py`) was calibrated for 2× resolution rendering. Adjust if PDFs render at a different DPI.
 
 ## Output Layout
 
+All output goes under `OUTPUT_ROOT` (env var, default `D:\project_outputs` on Windows / `project_outputs_local` relative to repo on Linux).
+
 ```
-D:\project_outputs\
+$OUTPUT_ROOT/
 ├── dataset_index.csv
-├── processing_status.csv          # open in Excel to see progress
-├── grids\{collection}\{year}\{month}\{stem}\
+├── processing_status.csv          # 44-column master tracker — open in Excel
+├── success.csv                    # records where all stages passed
+├── review.csv                     # records needing manual review
+├── dot_locations.csv              # dot (row,col) + STR for coord enrichment
+├── latlong_records.csv            # records with direct lat/lon extracted
+├── dot_coordinates.csv            # final resolved (lat, lon) — after RDS enrichment
+├── grids/{collection}/{year}/{month}/{stem}/
 │   └── {stem}_page_NN_grid.png
-├── locations\...\
+├── locations/.../
 │   ├── {stem}_page_NN_location_crop.png
 │   └── {stem}_page_NN_location_page.png   # full page with blue bounding box
-├── counties\...\
+├── counties/.../
 │   ├── {stem}_page_NN_county_crop.png
 │   └── {stem}_page_NN_county_page.png     # full page with green bounding box
-├── metadata\...\{stem}\metadata.json      # all extracted fields + confidence
-├── logs\...\{stem}.log                    # DEBUG-level per-PDF log
-└── manual_review\failed_records.csv
+├── metadata/.../{stem}/metadata.json      # all extracted fields + confidence
+├── logs/.../{stem}.log                    # DEBUG-level per-PDF log
+└── manual_review/failed_records.csv
 ```
 
 ## Config Changes
 
-All paths are in `config.py` as `pathlib.Path` objects. The two most commonly changed values:
-- `OUTPUT_ROOT = Path(r"D:\project_outputs")` — change to redirect all output
-- `RESOLUTION_MULTIPLIER = 2` — increase if OCR quality is poor, decrease for speed
+All paths are in `config.py` as `pathlib.Path` objects. Controlled by env vars — see `.env.example`.
+Key values:
+- `OUTPUT_ROOT` env var — redirects all output (Docker: set to `/tmp/output` by `run_batch_job.py`)
+- `RESOLUTION_MULTIPLIER = 2` — increase for better OCR quality, decrease for speed
 
 ## Adding a New Stage
 
 1. Create `yourmodule/your_extractor.py` with `process_single_X(manager, output_dir, pdf_stem, logger) -> dict`
 2. Add `STAGE_X = "x"` to `config.py` and append to `ALL_STAGES`
 3. Add a branch in `main._dispatch()`
-4. Add `{stage}_status`, `{stage}_confidence`, `{stage}_detail` columns to `utils/processing_status._FIELDNAMES`
+4. Add `{stage}_status`, `{stage}_confidence`, `{stage}_error_type` + any output columns to `utils/processing_status._FIELDNAMES`
+5. Add a matching branch in `ProcessingStatus.mark_done()` to store result fields
+6. Add the stage label to `main._STAGE_LABEL`
+
+## Security — Never Commit
+
+- `.env`, `credentials/`, `*.pem`, `*.key`, `*.json` (except `aws/config/*.json` and `docs/data/*.json`)
+- `smiling-breaker*.json` — GCP service account key
+- RDS credentials (`RDS_HOST`, `RDS_USER`, `RDS_PASSWORD`) — use `.env` locally, Secrets Manager on AWS
+- Gemini API key (`GOOGLE_API_KEY`) — same

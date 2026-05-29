@@ -255,7 +255,7 @@
   <div class="spinner"></div>
   <h2>OSU Well Records Map</h2>
   <p>Loading Oklahoma historical oil &amp; gas wells...</p>
-  <p id="load-detail">Fetching verified well locations from S3</p>
+  <p id="load-detail">Fetching verified well locations...</p>
 </div>
 
 <!-- Header -->
@@ -282,6 +282,8 @@
         <div class="stat-box"><div class="val" id="stat-counties">—</div><div class="lbl">Counties</div></div>
         <div class="stat-box"><div class="val" id="stat-year-min">—</div><div class="lbl">Earliest</div></div>
         <div class="stat-box"><div class="val" id="stat-year-max">—</div><div class="lbl">Latest</div></div>
+        <div class="stat-box"><div class="val" id="stat-precise">—</div><div class="lbl">Precise 📍</div></div>
+        <div class="stat-box"><div class="val" id="stat-approx">—</div><div class="lbl">Approx ◎</div></div>
       </div>
 
       <!-- Filters -->
@@ -292,8 +294,10 @@
       <select id="filter-decade"><option value="">All Decades</option></select>
       <select id="filter-resolution">
         <option value="">All Resolution Types</option>
-        <option value="quadrant_direct">Quadrant Direct</option>
-        <option value="rds_lookup">RDS PLSS Lookup</option>
+        <option value="quadrant_direct">Quadrant Direct (precise)</option>
+        <option value="p4_quadrant_direct">Pass 4 — Lease Inferred (precise)</option>
+        <option value="section_centroid">Section Centroid (approx ±½ mi)</option>
+        <option value="p3_">Pass 3 — County Inferred (precise)</option>
       </select>
       <button class="filter-btn" onclick="applyFilters()">Apply Filters</button>
       <button class="reset-btn" onclick="resetFilters()">↺ Reset All Filters</button>
@@ -301,6 +305,10 @@
       <!-- Legend -->
       <div class="section-label">Decade Legend <span style="color:#3a4a60;font-size:9px;font-weight:400">(click to toggle)</span></div>
       <div id="legend"></div>
+      <div style="margin-top:8px;font-size:9.5px;color:#4a6070;line-height:1.7">
+        <span style="font-weight:700;color:#5a8090">📍 Teardrop</span> = precise (dot-interpolated, ~330 ft)<br>
+        <span style="font-weight:700;color:#5a8090">◎ Open ring</span> = approx section centroid (±½ mi)
+      </div>
 
       <!-- Top Counties -->
       <div class="section-label">Top Counties</div>
@@ -309,12 +317,14 @@
       <!-- Data info -->
       <div class="section-label">About This Dataset</div>
       <div style="font-size:10px;color:#3a4a60;line-height:1.6">
-        Coordinates resolved via quadrant-direct mapping from PLSS grid dot positions on scanned well permit PDFs.
-        Pipeline: AWS Batch → Google Vision OCR → Gemini Flash AI → PostgreSQL PLSS lookup.
+        Coordinates resolved via multi-pass PLSS pipeline from scanned Oklahoma oil &amp; gas well permit PDFs (1911–2024).
+        <strong style="color:#5a7090">📍 Precise</strong> = dot position interpolated within ¼-section (~330 ft).
+        <strong style="color:#5a7090">◎ Approx</strong> = section centroid only (±½ mile); shown as open rings on the map.
+        Pipeline: Google Vision OCR → Gemini Flash AI → PostgreSQL PLSS lookup → 5-pass coordinate resolver.
         <br><br>
         <strong style="color:#5a7090">Updated:</strong> <span id="data-updated">—</span>
         <br>
-        <strong style="color:#5a7090">Source:</strong> OSU Well Records · AWS S3
+        <strong style="color:#5a7090">Source:</strong> OSU Well Records
       </div>
 
     </div>
@@ -432,9 +442,29 @@ function initMap() {
 }
 
 // ─── Marker icons ─────────────────────────────────────────────────────────────
-// Google Maps-style teardrop pins — highly visible on satellite
-function makePin(decade, confidence) {
-  const color  = DECADE_COLORS[decade] || DECADE_COLORS["unknown"];
+// Precise records  → Google Maps-style teardrop pin
+// Centroid records → open dashed ring (approx ±½ mi)
+function makePin(decade, confidence, resolution) {
+  const color   = DECADE_COLORS[decade] || DECADE_COLORS["unknown"];
+  const isApprox = (resolution || "").includes("centroid");
+
+  if (isApprox) {
+    // Open dashed circle for approximate section-centroid records
+    const d = 14;
+    const r = d / 2;
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${d+4}" height="${d+4}" viewBox="0 0 ${d+4} ${d+4}">
+      <circle cx="${r+2}" cy="${r+2}" r="${r}" fill="none"
+              stroke="${color}" stroke-width="2.5" stroke-dasharray="3.5 2.5" opacity="0.85"/>
+      <circle cx="${r+2}" cy="${r+2}" r="${r*0.3}" fill="${color}" opacity="0.6"/>
+    </svg>`;
+    return L.divIcon({
+      html: svg,
+      iconSize:   [d+4, d+4],
+      iconAnchor: [r+2, r+2],
+      className:  ""
+    });
+  }
+
   const size   = confidence >= 90 ? 14 : confidence >= 70 ? 12 : 10;
   const r      = size / 2;
 
@@ -560,7 +590,7 @@ function renderMarkers(features) {
     const p      = f.properties;
     const lat    = f.geometry.coordinates[1];
     const lon    = f.geometry.coordinates[0];
-    const marker = L.marker([lat, lon], { icon: makePin(p.decade, p.confidence) });
+    const marker = L.marker([lat, lon], { icon: makePin(p.decade, p.confidence, p.resolution) });
     marker.bindPopup(buildPopup(p), { maxWidth: 360, className: "well-popup" });
     markerLayer.addLayer(marker);
   });
@@ -572,10 +602,14 @@ function renderMarkers(features) {
 function updateStats(features) {
   const years    = features.map(f => +f.properties.year).filter(y => y > 1800 && y < 2100);
   const counties = new Set(features.map(f => f.properties.county).filter(Boolean));
+  const precise  = features.filter(f => !(f.properties.resolution||"").includes("centroid")).length;
+  const approx   = features.length - precise;
   document.getElementById("stat-total").textContent    = features.length.toLocaleString();
   document.getElementById("stat-counties").textContent = counties.size;
   document.getElementById("stat-year-min").textContent = years.length ? Math.min(...years) : "—";
   document.getElementById("stat-year-max").textContent = years.length ? Math.max(...years) : "—";
+  document.getElementById("stat-precise").textContent  = precise.toLocaleString();
+  document.getElementById("stat-approx").textContent   = approx.toLocaleString();
   document.getElementById("well-count-badge").textContent = `${features.length.toLocaleString()} Wells`;
 }
 

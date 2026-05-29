@@ -53,7 +53,7 @@ LOG_GROUP     = os.environ.get("LOG_GROUP",     "/aws/batch/osu-pipeline")
 
 ECR_IMAGE     = os.environ.get(
     "ECR_IMAGE",
-    f"{_ACCT1}.dkr.ecr.{_ACCT1_REGION}.amazonaws.com/osu-pipeline:v15-skip-anchor",
+    f"{_ACCT1}.dkr.ecr.{_ACCT1_REGION}.amazonaws.com/osu-pipeline:v16-str-fix",
 )
 EXEC_ROLE_ARN = os.environ.get(
     "EXEC_ROLE_ARN",

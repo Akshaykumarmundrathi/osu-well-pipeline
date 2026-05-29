@@ -84,7 +84,14 @@ def _validate_twprng(v: str) -> str:
 
 
 def _extract_str(raw: str) -> tuple[str, str, str]:
-    """Pull (section, township, range) values from a free-text blob."""
+    """
+    Pull (section, township, range) values from a free-text blob.
+
+    Handles three 1911-era Oklahoma form layouts:
+      A) "Section 19  Township 18  Range 12"       — standard _SEC_RE match
+      B) "SECTION SW/4 of 13 TOWNSHIP 18 RANGE 11" — 'of N' fallback
+      C) "Sec. 18  Twp. 18  Range 7"              — abbreviated _SEC_RE match
+    """
     sec_m = _SEC_RE.search(raw)
     twp_m = _TWP_RE.search(raw)
     rng_m = _RNG_RE.search(raw)
@@ -92,6 +99,15 @@ def _extract_str(raw: str) -> tuple[str, str, str]:
     sec = _validate_section(_clean(sec_m.group(1)) if sec_m else "")
     twp = _validate_twprng(_clean(twp_m.group(1)) if twp_m else "")
     rng = _validate_twprng(_clean(rng_m.group(1)) if rng_m else "")
+
+    # Layout B fallback: "SECTION SW/4 of 13" — section number follows "of".
+    # Only activate when a "section" keyword is present but no digit immediately
+    # followed — avoids false positives from unrelated "of" occurrences.
+    if not sec and re.search(r"\bsec(?:tion)?\b", raw, re.I):
+        of_m = re.search(r"\bof\s+(\d{1,2})\b", raw, re.I)
+        if of_m:
+            sec = _validate_section(of_m.group(1))
+
     return sec, twp, rng
 
 

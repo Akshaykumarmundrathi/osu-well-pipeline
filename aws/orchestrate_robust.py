@@ -35,19 +35,37 @@ import boto3
 from botocore.config import Config
 
 # ---------------------------------------------------------------------------
-# Config
+# Config — all overridable via environment variables (set from .env.account2)
 # ---------------------------------------------------------------------------
-ACCOUNT_ID    = "225989338968"
-REGION        = "us-east-1"
-INPUT_BUCKET  = "osu-well-records-225989338968"
-OUTPUT_BUCKET = "osu-pipeline-results"
-INDEX_KEY     = "index/dataset_index.csv"
-JOB_QUEUE     = "osu-pipeline-queue"
-JOB_DEF_NAME  = "osu-pipeline-job"
-ECR_IMAGE     = f"{ACCOUNT_ID}.dkr.ecr.{REGION}.amazonaws.com/osu-pipeline:v9-threadfix"
-EXEC_ROLE_ARN = f"arn:aws:iam::{ACCOUNT_ID}:role/osu-batch-execution-role"
-TASK_ROLE_ARN = f"arn:aws:iam::{ACCOUNT_ID}:role/osu-batch-task-role"
-LOG_GROUP     = "/aws/batch/osu-pipeline"
+# Account 1 (ECR + source PDFs)
+_ACCT1         = os.environ.get("ACCOUNT1_ID",      "225989338968")
+_ACCT1_REGION  = os.environ.get("ACCOUNT1_REGION",  "us-east-1")
+# Account 2 (Batch execution)
+_ACCT2         = os.environ.get("ACCOUNT2_ID",      "266087050585")
+
+REGION        = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
+INPUT_BUCKET  = os.environ.get("INPUT_BUCKET",  "osu-well-records-225989338968")
+OUTPUT_BUCKET = os.environ.get("OUTPUT_BUCKET", "osu-pipeline-results-mano")
+INDEX_KEY     = os.environ.get("INDEX_KEY",     "index/dataset_index.csv")
+JOB_QUEUE     = os.environ.get("JOB_QUEUE",     "osu-pipeline-queue")
+JOB_DEF_NAME  = os.environ.get("JOB_DEF_NAME",  "osu-pipeline-job")
+LOG_GROUP     = os.environ.get("LOG_GROUP",     "/aws/batch/osu-pipeline")
+
+ECR_IMAGE     = os.environ.get(
+    "ECR_IMAGE",
+    f"{_ACCT1}.dkr.ecr.{_ACCT1_REGION}.amazonaws.com/osu-pipeline:v15-skip-anchor",
+)
+EXEC_ROLE_ARN = os.environ.get(
+    "EXEC_ROLE_ARN",
+    f"arn:aws:iam::{_ACCT2}:role/osu-batch-execution-role",
+)
+TASK_ROLE_ARN = os.environ.get(
+    "TASK_ROLE_ARN",
+    f"arn:aws:iam::{_ACCT2}:role/osu-batch-task-role",
+)
+
+# Gemini model passed into the container
+GEMINI_FLASH_MODEL = os.environ.get("GEMINI_FLASH_MODEL", "gemini-2.0-flash-lite")
 
 DEFAULT_SLICE_SIZE = 500
 DEFAULT_WORKERS    = 4
@@ -278,9 +296,10 @@ def _read_slice_states(n_slices: int) -> dict[int, str]:
 def _verify_ecr_image(image: str = ECR_IMAGE) -> bool:
     """Confirm the ECR image exists before attempting to use it. Fail fast."""
     try:
-        repo_and_tag = image.split(".amazonaws.com/", 1)[-1]   # osu-pipeline:v6-fixed-2
+        repo_and_tag = image.split(".amazonaws.com/", 1)[-1]   # osu-pipeline:v15-skip-anchor
         repo, tag    = repo_and_tag.rsplit(":", 1)
-        ecr = boto3.client("ecr", region_name=REGION, config=_CFG)
+        # ECR lives in Account 1 — use Account 1's region, not Account 2's
+        ecr = boto3.client("ecr", region_name=_ACCT1_REGION, config=_CFG)
         ecr.describe_images(repositoryName=repo, imageIds=[{"imageTag": tag}])
         log.info("ECR image verified: %s", image)
         return True
@@ -347,12 +366,13 @@ def _register_fixed_job_def(slice_size: int, workers: int) -> str:
                     {"name": "WORKERS",               "value": str(workers)},
                     {"name": "CHECKPOINT_INTERVAL_S", "value": "240"},
                     {"name": "GEMINI_MIN_CALL_GAP_S", "value": "2"},
-                    {"name": "USE_VISION_API",         "value": "0"},
-                    {"name": "DISK_WARN_GB",           "value": "8"},
-                    {"name": "DISK_PRUNE_GB",          "value": "4"},
+                    {"name": "USE_VISION_API",            "value": "0"},
+                    {"name": "DISK_WARN_GB",              "value": "8"},
+                    {"name": "DISK_PRUNE_GB",             "value": "4"},
                     {"name": "INPUT_BUCKET",              "value": INPUT_BUCKET},
                     {"name": "OUTPUT_BUCKET",             "value": OUTPUT_BUCKET},
                     {"name": "INDEX_KEY",                 "value": INDEX_KEY},
+                    {"name": "GEMINI_FLASH_MODEL",        "value": GEMINI_FLASH_MODEL},
                     {"name": "GOOGLE_CREDS_SECRET_ID",    "value": "osu-pipeline/credentials"},
                     {"name": "RDS_CREDS_SECRET_ID",       "value": "osu-pipeline/rds"},
                 ],

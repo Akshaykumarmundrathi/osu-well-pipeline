@@ -17,6 +17,10 @@ package-lock.json
 ### Claude Code internal state — never commit
 .claude/
 
+### AWS env files — generated, may contain credentials
+aws/.env.account2
+aws/.env.account1
+
 ### Credentials — NEVER commit these
 credentials/
 **/credentials/
@@ -49,6 +53,7 @@ visualizer/analysis_state.json
 .env
 .env.*
 !.env.example
+!aws/.env.account2.template
 
 ### Model weights (large binaries)
 *.pth

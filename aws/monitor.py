@@ -27,13 +27,13 @@ import boto3
 from botocore.exceptions import ClientError
 
 # ---------------------------------------------------------------------------
-# Config — mirrors orchestrate_robust.py constants
+# Config — all overridable via environment variables (set from .env.account2)
 # ---------------------------------------------------------------------------
-REGION         = "us-east-1"
-OUTPUT_BUCKET  = "osu-pipeline-results"
+REGION         = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
+OUTPUT_BUCKET  = os.environ.get("OUTPUT_BUCKET",      "osu-pipeline-results-mano")
 PROGRESS_KEY   = "state/progress_map.json"
-JOB_QUEUE      = "osu-pipeline-queue"
-LOG_GROUP      = "/aws/batch/osu-pipeline"
+JOB_QUEUE      = os.environ.get("JOB_QUEUE",          "osu-pipeline-queue")
+LOG_GROUP      = os.environ.get("LOG_GROUP",           "/aws/batch/osu-pipeline")
 
 # --- Dashboard alert thresholds (can be overridden via env) ---
 # Warn when logic_failed slices exceed this % of total.

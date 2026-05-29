@@ -115,6 +115,15 @@ def _is_valid_lon(v: float) -> bool:
     return -180.0 <= v <= 180.0
 
 
+# Oklahoma bounding box (generous margins to avoid rejecting legitimate edge coords)
+_OK_LAT_MIN, _OK_LAT_MAX = 32.0, 37.0
+_OK_LON_MIN, _OK_LON_MAX = -104.0, -94.0
+
+
+def _is_oklahoma(lat: float, lon: float) -> bool:
+    return _OK_LAT_MIN <= lat <= _OK_LAT_MAX and _OK_LON_MIN <= lon <= _OK_LON_MAX
+
+
 def _extract_labeled(text: str):
     """
     Returns (lat, lon, confidence) or (None, None, 0).
@@ -307,6 +316,15 @@ def process_single_latlong(
                 form_type = loc_hdr["form_type"] if loc_hdr["found"] else ""
 
             if lat is not None and lon is not None:
+                if not _is_oklahoma(lat, lon):
+                    log.warning(
+                        "Lat/Lon out of Oklahoma bounds -- page %d  "
+                        "lat=%.6f  lon=%.6f  method=%s  form=%s -- rejecting",
+                        page_num, lat, lon, method, form_type or "none",
+                    )
+                    lat, lon = None, None
+                    continue
+
                 well_type = _detect_well_type(full_text, well_name)
                 log.info(
                     "Lat/Lon -- page %d  lat=%.6f  lon=%.6f  conf=%d  "

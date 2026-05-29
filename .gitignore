@@ -14,9 +14,8 @@ node_modules/
 package.json
 package-lock.json
 
-### Claude Code internal state
-.claude/worktrees/
-.claude/tasks/
+### Claude Code internal state — never commit
+.claude/
 
 ### Credentials — NEVER commit these
 credentials/
@@ -32,6 +31,7 @@ credentials/
 *google*.json
 *aws*credentials*
 *aws*access*
+smiling-breaker*.json
 
 ### Visualizer — generated/stale output files
 visualizer/well_locations.json

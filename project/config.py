@@ -28,9 +28,15 @@ MODEL_PRO_NAME   = os.environ.get("GEMINI_PRO_MODEL",   "gemini-2.0-flash-lite")
 
 # -- Source / Output Paths -----------------------------------------------------
 # Override with environment variables for cloud / Docker deployments.
-# Local dev defaults keep existing behaviour on Windows workstations.
-SOURCE_ROOT = Path(os.environ.get("SOURCE_ROOT", r"D:"))
-OUTPUT_ROOT = Path(os.environ.get("OUTPUT_ROOT", r"D:\project_outputs"))
+# Local Windows dev: falls back to D:\ defaults.
+# Linux / Docker / CI: falls back to /tmp paths so the container works without
+# any env var set (though run_batch_job.py always sets OUTPUT_ROOT=/tmp/output).
+import sys as _sys
+_DEFAULT_SOURCE = r"D:" if _sys.platform == "win32" else str(Path.home())
+_DEFAULT_OUTPUT = r"D:\project_outputs" if _sys.platform == "win32" else "/tmp/output"
+del _sys
+SOURCE_ROOT = Path(os.environ.get("SOURCE_ROOT", _DEFAULT_SOURCE))
+OUTPUT_ROOT = Path(os.environ.get("OUTPUT_ROOT", _DEFAULT_OUTPUT))
 
 # Filenames only — callers that need a full path do output_root / CONSTANT.
 DATASET_INDEX_CSV     = "dataset_index.csv"

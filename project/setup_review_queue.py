@@ -30,8 +30,16 @@ from datetime import datetime
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-_DEFAULT_OUTPUT = r"D:\project_outputs_local"
-_D_PROJECT      = Path(r"D:\project_modular\project")
+import sys as _sys
+_DEFAULT_OUTPUT = os.environ.get(
+    "OUTPUT_ROOT",
+    r"D:\project_outputs_local" if _sys.platform == "win32" else "/tmp/output",
+)
+_D_PROJECT = Path(os.environ.get(
+    "D_PROJECT_ROOT",
+    str(Path(__file__).parent),   # default: same directory as this script
+))
+del _sys
 if _D_PROJECT.exists() and str(_D_PROJECT) not in sys.path:
     sys.path.insert(0, str(_D_PROJECT))
 

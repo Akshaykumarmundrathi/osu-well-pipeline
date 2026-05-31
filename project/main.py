@@ -1411,6 +1411,15 @@ def run_pipeline(args):
     if args.limit:
         records = records[: args.limit]
 
+    # Batch slice partitioning: each container handles 1/N of the records.
+    # Records are sorted by pdf_stem for deterministic, reproducible slices.
+    if args.slice_index is not None and args.total_slices:
+        records.sort(key=lambda r: r.pdf_stem)
+        n = args.total_slices
+        i = args.slice_index
+        records = [r for idx, r in enumerate(records) if idx % n == i]
+        _p(f"  Batch slice {i}/{n}: {len(records):,} records assigned to this job")
+
     stages = (args.stage,) if args.stage else ALL_STAGES
     stage_names = " -> ".join(_STAGE_LABEL.get(s, s) for s in stages)
 
@@ -1669,7 +1678,20 @@ def main():
                          "Set to N <= os.cpu_count() for ~Nx speedup.")
     ap.add_argument("--verbose",   action="store_true",
                     help="Show DEBUG output on console")
+    # AWS Batch slice args: partition the dataset_index into N equal slices
+    # and process only slice number I (0-based).  run_batch_job.py sets these
+    # via env vars BATCH_SLICE_INDEX / BATCH_TOTAL_SLICES.
+    ap.add_argument("--slice-index",  type=int, default=None,
+                    help="(Batch) 0-based index of this job's slice")
+    ap.add_argument("--total-slices", type=int, default=None,
+                    help="(Batch) total number of slices")
     args = ap.parse_args()
+
+    # Env-var fallback for Batch (container sets BATCH_SLICE_INDEX etc.)
+    if args.slice_index  is None and os.environ.get("BATCH_SLICE_INDEX"):
+        args.slice_index  = int(os.environ["BATCH_SLICE_INDEX"])
+    if args.total_slices is None and os.environ.get("BATCH_TOTAL_SLICES"):
+        args.total_slices = int(os.environ["BATCH_TOTAL_SLICES"])
 
     if args.verbose:
         import logging

@@ -1,43 +1,59 @@
-**/__pycache__
-**/*.pyc
-**/*.pyo
-.git
-.claude
-.pytest_cache
-ONBOARDING.md
-CONTEXT.md
-context.md
-CLAUDE.md
-AWS_SETUP_GUIDE.md
-DEPLOY.md
-README.md
-explore_plss_db.py
-build.ps1
-docker-compose.yml
-
-# Output directories — never in the image
-project_outputs*/
-aws/results/
-aws/build/
-
-# Test PDFs — not needed in image
-pdfs/
-project/_smoketest.py
-
-# Archives
-*.zip
-
-# Credentials — NEVER baked into image
-credentials/
+# ── Never copy into the image ──────────────────────────────────────────────
 .env
 .env.*
 !.env.example
 
-# Specific JSON files that are secrets (NOT aws/config/*.json which are templates)
-smiling-breaker-*.json
+# Credentials / secrets
+credentials/
+*.pem
+*.key
+*.p12
+smiling-breaker*.json
 
-# Tests — not needed in runtime image
-tests/
+# Git / IDE
+.git/
+.gitignore
+.github/
+.vscode/
+.idea/
 
-# Well dot detector source files not needed at runtime
-well_dot_detector/
+# Python caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Local data / outputs (large — never in image)
+project_outputs*/
+project_outputs_cloud/
+smoke_test_output/
+outputs_1911/
+pdfs/
+*.zip
+*.tar.gz
+
+# Docs site (served from GitHub Pages, not needed in container)
+docs/
+
+# Test / QA artifacts
+inspect_grids.py
+run_1911.py
+*.csv
+!requirements.txt
+
+# Windows-specific
+Thumbs.db
+desktop.ini
+
+# macOS
+.DS_Store
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Large model files are INCLUDED (unet_best.pth is needed at runtime)
+# If you have other large .pth files, add them here:
+# other_model.pth

@@ -41,9 +41,12 @@ logger = logging.getLogger("safeguards")
 # Disk — derived from OUTPUT_ROOT env var so the correct drive is monitored
 # regardless of where outputs are stored (D:\, C:\, E:\, etc.)
 import os as _os
-_output_root_str = _os.environ.get("OUTPUT_ROOT", r"D:\project_outputs_local")
+import sys as _sys2
+_default_out = r"D:\project_outputs_local" if _sys2.platform == "win32" else "/tmp/output"
+del _sys2
+_output_root_str = _os.environ.get("OUTPUT_ROOT", _default_out)
 _output_drive    = Path(_output_root_str).anchor   # e.g. "D:\\" or "/"
-DISK_PATH         = Path(_output_drive) if _output_drive else Path("D:/")
+DISK_PATH        = Path(_output_drive) if _output_drive else Path("/tmp")
 del _os, _output_root_str, _output_drive
 
 DISK_WARN_GB      = 10.0   # log a warning below this

@@ -283,7 +283,11 @@ def main() -> None:
     ap.add_argument("--limit",  type=int, default=3,
                     help="Max PDFs to test from --dir (default 3)")
     ap.add_argument("--output", type=Path,
-                    default=Path(r"D:\project_outputs_test"),
+                    default=Path(os.environ.get(
+                        "OUTPUT_ROOT",
+                        r"D:\project_outputs_test" if __import__("sys").platform == "win32"
+                        else "/tmp/output_test"
+                    )),
                     help="Output root for test artefacts")
     ap.add_argument("--no-check", action="store_true",
                     help="Skip connection/credential checks")

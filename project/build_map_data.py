@@ -254,6 +254,18 @@ def _build_feature(row: dict, dot_lat: float, dot_lon: float) -> dict:
         # Position within PLSS cell (0-1)
         "cell_rel_x":         _safe_float(row.get("cell_rel_x")),
         "cell_rel_y":         _safe_float(row.get("cell_rel_y")),
+        # PLSS quadrant cell corners — four corners of the ~200-acre cell
+        # Used by the map to draw a highlight polygon showing the certain area
+        # (even if the exact dot position is uncertain, the cell is definitive)
+        # GeoJSON convention: [lon, lat]
+        "cell_tl_lat":        _safe_float(row.get("cell_tl_lat")),
+        "cell_tl_lon":        _safe_float(row.get("cell_tl_lon")),
+        "cell_tr_lat":        _safe_float(row.get("cell_tr_lat")),
+        "cell_tr_lon":        _safe_float(row.get("cell_tr_lon")),
+        "cell_bl_lat":        _safe_float(row.get("cell_bl_lat")),
+        "cell_bl_lon":        _safe_float(row.get("cell_bl_lon")),
+        "cell_br_lat":        _safe_float(row.get("cell_br_lat")),
+        "cell_br_lon":        _safe_float(row.get("cell_br_lon")),
         # S3 URL — direct link to the original well-record PDF
         "s3_url":             _s3_pdf_url(collection_raw, year, month, stem),
         # Flags

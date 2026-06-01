@@ -152,6 +152,33 @@
   .pdf-link:hover { opacity: .85; }
   .s3-path { font-size: 9.5px; color: #3a4a60; margin-top: 6px; word-break: break-all; text-align: center; }
 
+  /* Quadrant cell highlight tooltip */
+  .quadrant-tooltip {
+    background: rgba(13,23,42,.92) !important;
+    border: 1px solid rgba(245,158,11,.4) !important;
+    border-radius: 7px !important;
+    color: #e2e8f0 !important;
+    padding: 8px 10px !important;
+    font-family: 'Segoe UI', Arial, sans-serif !important;
+    box-shadow: 0 4px 12px rgba(0,0,0,.5) !important;
+    pointer-events: none;
+  }
+  .quadrant-tooltip::before { display: none !important; }
+
+  /* Quadrant badge inside popup */
+  .quadrant-badge {
+    display: inline-block;
+    background: rgba(245,158,11,.18);
+    border: 1px solid rgba(245,158,11,.45);
+    color: #fcd34d;
+    border-radius: 5px;
+    padding: 2px 8px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .4px;
+    font-family: monospace;
+  }
+
   /* Open Street Maps button in GMaps style */
   .gm-style-btn {
     background: #fff; color: #444; border: none; border-radius: 3px;
@@ -366,6 +393,7 @@ const DECADE_COLORS = {
 // ─── State ────────────────────────────────────────────────────────────────────
 let allFeatures    = [];
 let markerLayer    = null;
+let quadrantLayer  = null;   // highlighted PLSS cell polygon
 let map            = null;
 let hiddenDecades  = new Set();
 let sidebarOpen    = true;
@@ -524,7 +552,26 @@ function buildPopup(p) {
   <div class="popup-row"><span class="lbl">Filed</span><span class="val">${p.year || "—"}${p.month ? " &bull; " + p.month.replace(/^\d+ - /, "") : ""}</span></div>
   <div class="popup-row"><span class="lbl">County</span><span class="val">${p.county || "—"}</span></div>
   <div class="popup-row"><span class="lbl">PLSS Location</span><span class="val">${plss || "—"}</span></div>
-  <div class="popup-row"><span class="lbl">Quadrant</span><span class="val">${p.quadrant || "—"}</span></div>
+  <div class="popup-row">
+    <span class="lbl">Quadrant</span>
+    <span class="val">
+      ${p.quadrant ? `<span class="quadrant-badge">${p.quadrant}</span>` : "—"}
+      ${p.quadrant_source ? `<span style="color:#64748b;font-size:9.5px;margin-left:5px">(${p.quadrant_source})</span>` : ""}
+    </span>
+  </div>
+  ${(p.cell_tl_lat && p.cell_br_lat) ? `
+  <div class="popup-row" style="border-top:1px solid rgba(245,158,11,.15);margin-top:4px;padding-top:6px">
+    <span class="lbl" style="color:#f59e0b">Cell area</span>
+    <span class="val" style="color:#fcd34d;font-size:10.5px">
+      ${(()=>{
+        const ftNS = Math.round(Math.abs(p.cell_tl_lat - p.cell_bl_lat) * 364000);
+        const ftEW = Math.round(Math.abs(p.cell_tl_lon - p.cell_tr_lon) * 288000);
+        const acres = Math.round(ftNS * ftEW / 43560);
+        return `~${ftNS}ft × ${ftEW}ft ≈ ${acres} acres`;
+      })()}
+      <span style="color:#64748b;font-size:9px;display:block;margin-top:1px">highlighted on map — well is within this cell</span>
+    </span>
+  </div>` : ""}
   <div class="popup-row"><span class="lbl">Coordinates</span><span class="val coords">${(+p.lat).toFixed(5)}°N, ${(+p.lon).toFixed(5)}°W</span></div>
   <div class="popup-row"><span class="lbl">Resolution</span><span class="val">${p.resolution || "—"}</span></div>
   <div class="popup-row"><span class="lbl">AI Confidence</span><span class="val ${confClass(p.confidence)}">${p.confidence}%</span></div>
@@ -554,9 +601,67 @@ function buildPopup(p) {
 </div>`;
 }
 
+// ─── Quadrant highlight ───────────────────────────────────────────────────────
+function clearQuadrantHighlight() {
+  if (quadrantLayer) { map.removeLayer(quadrantLayer); quadrantLayer = null; }
+}
+
+function showQuadrantHighlight(p) {
+  clearQuadrantHighlight();
+
+  const tl_lat = p.cell_tl_lat, tl_lon = p.cell_tl_lon;
+  const tr_lat = p.cell_tr_lat, tr_lon = p.cell_tr_lon;
+  const br_lat = p.cell_br_lat, br_lon = p.cell_br_lon;
+  const bl_lat = p.cell_bl_lat, bl_lon = p.cell_bl_lon;
+
+  if (!tl_lat || !tl_lon || !br_lat || !br_lon) return;  // no corner data
+
+  const conf = +(p.dot_confidence || p.confidence || 0);
+
+  // Colour: amber for high confidence, blue-grey for low
+  // High conf (≥90) = vivid amber  |  Mid (70-89) = soft gold  |  Low (<70) = steel blue
+  const fillColor   = conf >= 90 ? "#f59e0b" : conf >= 70 ? "#fcd34d" : "#60a5fa";
+  const borderColor = conf >= 90 ? "#d97706" : conf >= 70 ? "#f59e0b" : "#3b82f6";
+  const fillOpacity = conf >= 90 ? 0.22      : conf >= 70 ? 0.16      : 0.12;
+
+  // Cell polygon (TL → TR → BR → BL)
+  quadrantLayer = L.polygon([
+    [tl_lat, tl_lon],
+    [tr_lat, tr_lon],
+    [br_lat, br_lon],
+    [bl_lat, bl_lon],
+  ], {
+    color:       borderColor,
+    weight:      2.5,
+    dashArray:   "6 4",
+    fillColor:   fillColor,
+    fillOpacity: fillOpacity,
+    interactive: false,   // don't steal clicks from the marker
+  }).addTo(map);
+
+  // Approx cell size in feet (1 section = 5280 ft; 8×8 grid → each cell ≈ 660 ft)
+  const latSpan = Math.abs(tl_lat - bl_lat);
+  const lonSpan = Math.abs(tl_lon - tr_lon);
+  const ftNS    = Math.round(latSpan * 364000);   // ~364000 ft per degree lat
+  const ftEW    = Math.round(lonSpan * 288000);   // ~288000 ft per degree lon at 35°N
+  const acres   = Math.round(ftNS * ftEW / 43560);
+
+  quadrantLayer.bindTooltip(
+    `<div style="font-size:11px;line-height:1.5">
+      <strong style="color:${borderColor}">📍 PLSS Quadrant Cell</strong><br>
+      <b>${p.quadrant || "unknown"}</b><br>
+      Sec ${p.section || "?"}  T${p.township || "?"}  R${p.range || "?"}<br>
+      <span style="color:#aaa">~${ftNS}ft × ${ftEW}ft  ≈ ${acres} acres</span><br>
+      <span style="color:#aaa">AI dot confidence: ${conf}%</span>
+    </div>`,
+    { sticky: false, opacity: 0.95, className: "quadrant-tooltip" }
+  );
+}
+
 // ─── Render markers ───────────────────────────────────────────────────────────
 function renderMarkers(features) {
   if (markerLayer) map.removeLayer(markerLayer);
+  clearQuadrantHighlight();
 
   markerLayer = L.markerClusterGroup({
     maxClusterRadius: 50,
@@ -592,10 +697,14 @@ function renderMarkers(features) {
     const lon    = f.geometry.coordinates[0];
     const marker = L.marker([lat, lon], { icon: makePin(p.decade, p.confidence, p.resolution) });
     marker.bindPopup(buildPopup(p), { maxWidth: 360, className: "well-popup" });
+    marker.on("click", () => showQuadrantHighlight(p));
     markerLayer.addLayer(marker);
   });
 
   map.addLayer(markerLayer);
+
+  // Clear quadrant highlight when clicking the map background
+  map.on("click", clearQuadrantHighlight);
 }
 
 // ─── Sidebar stats / UI ───────────────────────────────────────────────────────

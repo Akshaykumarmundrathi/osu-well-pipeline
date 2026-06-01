@@ -53,7 +53,7 @@ visualizer/analysis_state.json
 .env
 .env.*
 !.env.example
-!aws/.env.account2.template
+# !aws/.env.account2.template  # removed — file deleted
 
 ### Model weights (large binaries)
 *.pth
@@ -71,11 +71,19 @@ aws/build/
 *.pdf
 *.lnk
 
-### Dev QA outputs (debug PNGs + labeled CSVs from inspect_grids.py)
-outputs_1911/debug/
-outputs_1911/grids/
-# Keep outputs_1911/results.csv and outputs_1911/inspection.csv (hand labels — worth tracking)
-# To commit the labeled data: git add -f outputs_1911/results.csv outputs_1911/inspection.csv
+### Dev QA outputs — all local, never commit
+outputs_1911/
+
+### Local inspection set (downloaded from S3 / D:\ for manual review)
+inspection_pdfs/
+
+### Stale local-only files
+sample_*.txt
+*.docx
+pdfs/
+
+### Temp utility scripts
+aws/check_s3_counts.py
 
 ### IDE
 .vscode/

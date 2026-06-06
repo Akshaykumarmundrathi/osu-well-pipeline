@@ -1,29 +1,33 @@
 """
 Structural grid-anchor detection.
 
-Across decades, well-record forms place the STR grid relative to one of a
-few printed phrases:
+Well-record forms across all collections (1911-2024) carry one of these
+printed phrases near the dot-grid image:
 
-  - "Spot well located"        -> grid is immediately BELOW
-  - "Spot well"                -> grid is BELOW (variant)
-  - "Locate Well correctly"    -> grid is immediately ABOVE
-  - "Locate Well"              -> grid is ABOVE (older variant)
+  Phrase                          Seen in         Grid position relative to text
+  ─────────────────────────────── ─────────────── ───────────────────────────────
+  "Spot Well Correctly"           Colls 1-3       Grid is BELOW the text
+  "Spot Well Located"             Colls 1-2       Grid is BELOW the text
+  "Spot Well"                     Colls 1-6       Grid is BELOW the text
+  "Locate Well Correctly"         Colls 1-4       Grid is ABOVE the text label
+  "Locate Well And Dotline Lease" Coll 9          Grid is ABOVE the text label
+  "Locate Well" / "LOCATE WELL"  Colls 5-11      Grid is ABOVE the text label
 
-This module finds the anchor in OCR annotations and returns the
-page-pixel region to crop before running CV-based grid extractors.
-Cropping shrinks the search space and removes false-positive
-rectangles elsewhere on the form.
+The crop produced by crop_box_from_anchor() is intentionally BIDIRECTIONAL
+(extends both above and below the anchor) so that positional uncertainty —
+the grid label can sit inside the grid box, just below it, or just above it —
+is tolerated without requiring the caller to know the exact orientation.
 """
 
 import re
 
-# Order matters: more specific phrases tried first so "Locate Well correctly"
-# matches before the looser "Locate Well".
+# Order matters: most specific patterns first.
 _ANCHORS = [
-    (re.compile(r"spot\s+well\s+located", re.I), "below"),
-    (re.compile(r"locate\s+well\s+correctly", re.I), "above"),
-    (re.compile(r"locate\s+well\b", re.I), "above"),
-    (re.compile(r"spot\s+well\b",   re.I), "below"),
+    (re.compile(r"spot\s+well\s+located",          re.I), "below"),
+    (re.compile(r"locate\s+well\s+and\s+dotline",  re.I), "above"),   # Coll 9 variant
+    (re.compile(r"locate\s+well\s+correctly",       re.I), "above"),
+    (re.compile(r"locate\s+well\b",                 re.I), "above"),
+    (re.compile(r"spot\s+well\b",                   re.I), "below"),
 ]
 
 
@@ -84,20 +88,25 @@ def _union_bbox(anns):
 
 def crop_box_from_anchor(anchor_bbox, position: str,
                          page_w: int, page_h: int,
-                         crop_height: int = 1100,
-                         side_padding: int = 250):
+                         look_above: int = 700,
+                         look_below: int = 1100,
+                         side_padding: int = 450):
     """
     Compute a page region to crop before running grid extractors.
 
-    `position='below'`: region spans from anchor.y_max down to either
-       anchor.y_max + crop_height or page bottom, whichever smaller.
-    `position='above'`: region spans from max(0, anchor.y_min - crop_height)
-       up to anchor.y_min.
+    The crop is BIDIRECTIONAL — it extends `look_above` pixels above the
+    anchor and `look_below` pixels below it.  This tolerates positional
+    ambiguity: on some forms the label sits inside the grid box, on others
+    it sits just outside, and the exact direction varies by decade.
 
-    Sides are extended by `side_padding` pixels to capture the full grid
-    even when the anchor text is narrower than the grid box.
+    `position` is retained for signature compatibility but no longer controls
+    the vertical direction exclusively; it is used only as a hint when the
+    anchor sits so close to a page edge that one direction would be empty.
 
-    Returns (x0, y0, x1, y1) or None when the computed region is empty.
+    `side_padding` is generous (450px) to capture grids centred on the page
+    even when the anchor phrase appears on the left margin.
+
+    Returns (x0, y0, x1, y1) or None when the computed region is degenerate.
     """
     if anchor_bbox is None:
         return None
@@ -106,14 +115,9 @@ def crop_box_from_anchor(anchor_bbox, position: str,
     cx0 = max(0,      x0 - side_padding)
     cx1 = min(page_w, x1 + side_padding)
 
-    if position == "below":
-        cy0 = y1
-        cy1 = min(page_h, y1 + crop_height)
-    elif position == "above":
-        cy1 = y0
-        cy0 = max(0, y0 - crop_height)
-    else:
-        return None
+    # Extend bidirectionally around the anchor phrase
+    cy0 = max(0,      y0 - look_above)
+    cy1 = min(page_h, y1 + look_below)
 
     if cy1 <= cy0 or cx1 <= cx0:
         return None

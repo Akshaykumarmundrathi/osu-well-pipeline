@@ -27,6 +27,10 @@ def _largest_quad_bbox(binary, cv_image, min_side: int = 50):
     each exceed `min_side` pixels. Returns (cropped_region, (x,y,w,h))
     from the original `cv_image`. Returns (None, None) if no candidate
     found.
+
+    epsilon = 0.04 × perimeter  (was 0.02): looser approximation tolerates
+    the slightly wavy borders common on century-old scanned grid lines without
+    producing spurious 5- or 6-vertex shapes.
     """
     contours, _ = cv2.findContours(
         binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE,
@@ -35,7 +39,7 @@ def _largest_quad_bbox(binary, cv_image, min_side: int = 50):
     max_area = 0
     for cnt in contours:
         peri   = cv2.arcLength(cnt, True)
-        approx = cv2.approxPolyDP(cnt, 0.02 * peri, True)
+        approx = cv2.approxPolyDP(cnt, 0.04 * peri, True)  # was 0.02
         if len(approx) != 4:
             continue
         x, y, w, h = cv2.boundingRect(approx)
@@ -61,15 +65,24 @@ def _crop_with_buffer(cv_image, bbox):
 
 
 def extract_grid_region_adaptive(cv_image):
-    """Adaptive thresholding + morphology to isolate horizontal+vertical rules."""
+    """
+    Adaptive thresholding + morphology to isolate horizontal+vertical rules.
+
+    Kernel sizes are proportional to the image/crop width so this method
+    works at any scale — full-page (1224px) or anchor-cropped (~300-600px):
+      full-page  (1224px): h_kern ≈ 61px  → detects grid outer-border lines (≥147px) ✓
+      anchor-crop (400px): h_kern ≈ 20px  → also detects T3 interior cell lines (~20px) ✓
+    """
     gray   = cv2.cvtColor(cv_image, cv2.COLOR_BGR2GRAY)
     gray   = cv2.GaussianBlur(gray, (5, 5), 0)
     binary = cv2.adaptiveThreshold(
         gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
         cv2.THRESH_BINARY_INV, blockSize=15, C=8,
     )
-    h_kern = cv2.getStructuringElement(cv2.MORPH_RECT, (40, 1))
-    v_kern = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 40))
+    H, W = binary.shape
+    # Scale kernels to region size; floor at 15px to avoid degenerate kernels
+    h_kern = cv2.getStructuringElement(cv2.MORPH_RECT, (max(15, W // 20), 1))
+    v_kern = cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(15, H // 20)))
     h_lines = cv2.morphologyEx(binary, cv2.MORPH_OPEN, h_kern, iterations=2)
     v_lines = cv2.morphologyEx(binary, cv2.MORPH_OPEN, v_kern, iterations=2)
     grid    = cv2.addWeighted(h_lines, 0.5, v_lines, 0.5, 0.0)
@@ -104,25 +117,33 @@ def extract_grid_region_canny(cv_image):
 def extract_grid_region_hough(cv_image):
     """
     Probabilistic Hough transform: require ≥5 horizontal AND ≥5 vertical
-    lines, each spanning ≥10% of the corresponding image dimension. The
-    bbox is the union of all qualifying line endpoints.
+    lines each spanning ≥8% of the image dimension.
+
+    minLineLength is adaptive to the region width so it works both on full-page
+    scans (where only border lines qualify) and inside anchor crops (where
+    interior cell lines are also picked up):
+      full-page  (1224px): minLineLength ≈ 61px, threshold > 122px
+      anchor-crop (400px): minLineLength ≈ 20px, threshold >  32px
+    T3 grid lines (8×8 cells, grid ~159px wide) span the full grid width
+    so they all qualify at either scale.
     """
     gray  = cv2.cvtColor(cv_image, cv2.COLOR_BGR2GRAY)
     blur  = cv2.GaussianBlur(gray, (5, 5), 0)
     edges = cv2.Canny(blur, 50, 150, apertureSize=3)
+    H, W  = cv_image.shape[:2]
+    min_len = max(15, W // 20)   # adaptive; was hardcoded 50px
     lines = cv2.HoughLinesP(edges, 1, np.pi / 180,
-                            threshold=50, minLineLength=50, maxLineGap=10)
+                            threshold=40, minLineLength=min_len, maxLineGap=12)
     if lines is None:
         return None, None
 
-    H, W = cv_image.shape[:2]
     h_lines, v_lines = [], []
     for x1, y1, x2, y2 in (ln[0] for ln in lines):
         angle  = np.degrees(np.arctan2(y2 - y1, x2 - x1))
         length = np.hypot(x2 - x1, y2 - y1)
-        if abs(angle) < 5 and length > W * 0.1:
+        if abs(angle) < 5 and length > W * 0.08:    # was W*0.10
             h_lines.append((x1, y1, x2, y2))
-        elif abs(abs(angle) - 90) < 5 and length > H * 0.1:
+        elif abs(abs(angle) - 90) < 5 and length > H * 0.08:  # was H*0.10
             v_lines.append((x1, y1, x2, y2))
 
     if len(h_lines) < 5 or len(v_lines) < 5:
@@ -176,11 +197,20 @@ def extract_grid_region_corners(cv_image):
     """
     Shi-Tomasi corner detection: bbox spans the detected corner cloud.
     Useful when interior cell corners are visually prominent.
+
+    On full-page scans (>700px wide) corner detection picks up text glyphs
+    across the entire page — the resulting bbox spans most of the image and
+    is always rejected by the size filter, wasting CPU.  This method is
+    only effective inside a tightly pre-cropped anchor region (≤700px wide).
     """
+    H, W = cv_image.shape[:2]
+    if W > 700 or H > 700:
+        return None, None   # not useful at full-page scale — skip
+
     gray    = cv2.cvtColor(cv_image, cv2.COLOR_BGR2GRAY)
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
     corners = cv2.goodFeaturesToTrack(
-        blurred, maxCorners=150, qualityLevel=0.01, minDistance=10,
+        blurred, maxCorners=150, qualityLevel=0.01, minDistance=8,
     )
     if corners is None or len(corners) < 10:
         return None, None

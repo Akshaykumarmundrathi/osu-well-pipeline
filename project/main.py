@@ -1116,16 +1116,11 @@ def _dispatch(stage: str, manager: PDFDocumentManager,
 
     if stage == STAGE_GRID:
         from grid.scoring import process_single_grid
-        from config import TIER_EARLY, TIER_TRANSITION, tier_for
-        _cnum        = getattr(record, "collection_num", None) or 0
-        _tier        = tier_for(_cnum)
-        # Only skip the Tesseract anchor when we *know* this is an early/transition
-        # collection (handwritten docs with no printed anchor phrase). Unknown
-        # collection_num (0 / None) keeps anchor enabled so ad-hoc --flat runs
-        # still benefit from the anchor strategy.
-        _skip_anchor = bool(_cnum) and _tier in (TIER_EARLY, TIER_TRANSITION)
+        # Anchor phrases ("Spot Well Correctly", "Locate Well", etc.) are PRINTED
+        # text present across all collection tiers (confirmed Jun 2025 inspection).
+        # Always attempt the anchor pass; falls through to full-page CV if not found.
         return process_single_grid(manager, out_dir, pdf_stem, log,
-                                   skip_anchor=_skip_anchor)
+                                   skip_anchor=False)
 
     if stage == STAGE_LOCATION:
         from config import TIER_CONFIG, tier_for
@@ -1264,10 +1259,12 @@ def _retry_record(record: DatasetRecord, stages: tuple,
         STAGE_DOT:      paths.dots_dir(record),
     }
 
-    from config import TIER_EARLY, TIER_TRANSITION, tier_for as _tier_for
+    from config import tier_for as _tier_for
     _cnum        = getattr(record, "collection_num", None) or 0
     _tier        = _tier_for(_cnum)
-    _skip_anchor = bool(_cnum) and _tier in (TIER_EARLY, TIER_TRANSITION)
+    # Anchor phrases are printed text on all collection tiers (confirmed Jun 2025).
+    # Always attempt the anchor pass; falls through to full-page CV if not found.
+    _skip_anchor = False
 
     parts: list[str] = []
     for stage in stages:
@@ -1407,6 +1404,13 @@ def run_pipeline(args):
             if not records:
                 _p("ERROR: No records found. Run with --scan first.")
                 sys.exit(1)
+
+    # Collection filter — run only one collection when testing/staged rollout
+    if args.collection is not None:
+        before = len(records)
+        records = [r for r in records if r.collection_num == args.collection]
+        _p(f"  Collection filter --collection {args.collection}: "
+           f"{len(records):,} records (dropped {before - len(records):,})")
 
     if args.limit:
         records = records[: args.limit]
@@ -1681,6 +1685,8 @@ def main():
     # AWS Batch slice args: partition the dataset_index into N equal slices
     # and process only slice number I (0-based).  run_batch_job.py sets these
     # via env vars BATCH_SLICE_INDEX / BATCH_TOTAL_SLICES.
+    ap.add_argument("--collection",   type=int, default=None,
+                    help="Run only this collection number (e.g. 5 for ExportedFolderContents_5)")
     ap.add_argument("--slice-index",  type=int, default=None,
                     help="(Batch) 0-based index of this job's slice")
     ap.add_argument("--total-slices", type=int, default=None,

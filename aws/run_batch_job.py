@@ -227,6 +227,16 @@ def main():
         "--total-slices", str(TOTAL_SLICES),
         "--workers",      str(WORKERS),
     ]
+    # Collection filter: run only the specified collection in this container
+    _coll_filter = os.environ.get("COLLECTION_FILTER", "").strip()
+    if _coll_filter:
+        cmd += ["--collection", _coll_filter]
+        log.info("Collection filter: %s", _coll_filter)
+    # Pipeline stage: run only one extraction stage per task
+    _pipe_stage = os.environ.get("PIPELINE_STAGE", "").strip()
+    if _pipe_stage:
+        cmd += ["--stage", _pipe_stage]
+        log.info("Pipeline stage filter: %s", _pipe_stage)
     log.info("Running: %s", " ".join(cmd))
     t0 = time.monotonic()
     result = subprocess.run(cmd, check=False)

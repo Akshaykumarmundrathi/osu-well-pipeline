@@ -24,9 +24,14 @@ Keyboard shortcuts:
     Up  / W          Previous page
     Down / S         Next page
     Enter            Save note + Next PDF
-    X                Undo last drawn rectangle
+    X                Clear the active slot's rectangle
     T                Open OCR text popup
     Esc              Quit
+
+Slot selection:
+    Click any slot chip (1-GRID, 2-COUNTY, 3-STR, 4-LAT/LON) to make it
+    the active target for the next drag.  Slots are fully independent —
+    draw LAT/LON first if you like, skip GRID entirely, etc.
 """
 
 import argparse
@@ -308,18 +313,20 @@ class InspectionApp:
                   relief="flat", font=("Segoe UI", 8), padx=8, pady=3,
                   cursor="hand2", bd=0).pack(side="left", padx=(4, 10))
 
-        # Slot chips (colored badges showing fill state)
+        # Slot chips — CLICKABLE buttons to select which slot to draw next
         self._slot_chips = []
-        for skey, slabel, scolor, sborder in SLOT_DEFS:
-            lbl = tk.Label(self.page_frame, text=slabel,
-                           bg="#1e293b", fg="#475569",
-                           font=("Segoe UI", 8, "bold"),
-                           padx=8, pady=3, relief="flat")
-            lbl.pack(side="left", padx=2)
-            self._slot_chips.append(lbl)
+        for i, (skey, slabel, scolor, sborder) in enumerate(SLOT_DEFS):
+            btn = tk.Button(self.page_frame, text=slabel,
+                            command=lambda idx=i: self._set_active_slot(idx),
+                            bg="#1e293b", fg="#475569",
+                            activebackground="#334155", activeforeground="#fff",
+                            font=("Segoe UI", 8, "bold"),
+                            padx=8, pady=3, relief="flat", cursor="hand2", bd=0)
+            btn.pack(side="left", padx=2)
+            self._slot_chips.append(btn)
 
-        tk.Button(self.page_frame, text="< Undo",
-                  command=self._undo_last_slot,
+        tk.Button(self.page_frame, text="X Clear",
+                  command=self._clear_active_slot,
                   bg="#1e293b", fg="#64748b",
                   activebackground="#334155", activeforeground="#fff",
                   relief="flat", font=("Segoe UI", 8), padx=6, pady=3,
@@ -396,6 +403,18 @@ class InspectionApp:
                   activeforeground="#fff", relief="flat",
                   font=("Segoe UI", 9), padx=10, pady=5,
                   cursor="hand2", bd=0).pack(side="left", padx=4)
+        tk.Button(nav, text="<- Inherit",
+                  command=self._inherit_from_previous,
+                  bg="#164e63", fg="#67e8f9",
+                  activebackground="#0e7490", activeforeground="#fff",
+                  relief="flat", font=("Segoe UI", 9), padx=10, pady=5,
+                  cursor="hand2", bd=0).pack(side="left", padx=4)
+        tk.Button(nav, text="Fill Unreviewed",
+                  command=self._fill_unreviewed,
+                  bg="#1e3a5f", fg="#7dd3fc",
+                  activebackground="#2563eb", activeforeground="#fff",
+                  relief="flat", font=("Segoe UI", 9), padx=10, pady=5,
+                  cursor="hand2", bd=0).pack(side="left", padx=4)
         tk.Button(nav, text="Save Note & Next  >",
                   command=self.save_and_next,
                   bg="#b45309", fg="#fff", activebackground="#d97706",
@@ -409,7 +428,7 @@ class InspectionApp:
                   font=("Segoe UI", 10), padx=14, pady=5,
                   cursor="hand2", bd=0).pack(side="right", padx=4)
         self.lbl_status = tk.Label(nav,
-            text="Drag: 1=GRID  2=COUNTY  3=STR  4=LAT/LON(skip if absent)   X=undo   Enter=save+next",
+            text="Click chip to pick slot  →  drag to draw  |  X = clear active slot  |  Enter = save+next",
             bg="#0d2d52", fg="#475569", font=("Segoe UI", 8))
         self.lbl_status.pack(side="left", padx=16)
 
@@ -428,8 +447,8 @@ class InspectionApp:
         r.bind("<Up>",         lambda e: self.prev_page())
         r.bind("<w>",          lambda e: self.prev_page())
         r.bind("<Escape>",     lambda e: self._quit())
-        r.bind("<x>",          lambda e: self._undo_last_slot())
-        r.bind("<X>",          lambda e: self._undo_last_slot())
+        r.bind("<x>",          lambda e: self._clear_active_slot())
+        r.bind("<X>",          lambda e: self._clear_active_slot())
         r.bind("<t>",          lambda e: self._show_text_popup())
         r.bind("<T>",          lambda e: self._show_text_popup())
         r.bind("<MouseWheel>", self._mouse_wheel)
@@ -437,7 +456,25 @@ class InspectionApp:
     def _mouse_wheel(self, event):
         self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
-    # ── Slot indicator ────────────────────────────────────────────────────────
+    # ── Slot indicator & active-slot helpers ─────────────────────────────────
+
+    def _set_active_slot(self, idx: int):
+        """Click a slot chip to make it the target for the next drag."""
+        self._active_slot = idx
+        self._update_slot_indicator()
+
+    def _clear_active_slot(self):
+        """Remove the rectangle for the currently active slot (X key or X Clear button)."""
+        if self._active_slot >= len(SLOT_DEFS):
+            return
+        skey = SLOT_DEFS[self._active_slot][0]
+        if skey in self._slots:
+            del self._slots[skey]
+        if skey in self._slot_rects:
+            self.canvas.delete(self._slot_rects.pop(skey))
+        if skey in self._slot_texts:
+            self.canvas.delete(self._slot_texts.pop(skey))
+        self._update_slot_indicator()
 
     def _update_slot_indicator(self):
         for i, (skey, slabel, scolor, sborder) in enumerate(SLOT_DEFS):
@@ -468,8 +505,6 @@ class InspectionApp:
                 max(0, min(int(cy - oy), ih)))
 
     def _sel_press(self, event):
-        if self._active_slot >= len(SLOT_DEFS):
-            return  # all 4 slots filled — nothing to draw
         cx = self.canvas.canvasx(event.x)
         cy = self.canvas.canvasy(event.y)
         self._sel_start = (cx, cy)
@@ -552,22 +587,13 @@ class InspectionApp:
             rx0 + 4, ty, text=lbl_txt, anchor="nw",
             fill=scolor, font=("Segoe UI", 8, "bold"), tags="sel")
 
-        # Advance to next slot
-        self._active_slot = min(self._active_slot + 1, len(SLOT_DEFS))
-        self._update_slot_indicator()
-
-    def _undo_last_slot(self):
-        """Remove the most recently drawn slot (step back one)."""
-        if self._active_slot == 0:
-            return
-        self._active_slot -= 1
-        skey = SLOT_DEFS[self._active_slot][0]
-        if skey in self._slots:
-            del self._slots[skey]
-        if skey in self._slot_rects:
-            self.canvas.delete(self._slot_rects.pop(skey))
-        if skey in self._slot_texts:
-            self.canvas.delete(self._slot_texts.pop(skey))
+        # Move active pointer to the first empty slot (wrap-search from start)
+        first_empty = next(
+            (j for j, (sk, *_) in enumerate(SLOT_DEFS) if sk not in self._slots),
+            None)
+        if first_empty is not None:
+            self._active_slot = first_empty
+        # else all slots filled — keep _active_slot where it is; user clicks a chip to redraw
         self._update_slot_indicator()
 
     def _clear_all_slots(self):
@@ -579,6 +605,124 @@ class InspectionApp:
         self._slots.clear()
         self._active_slot = 0
         self._update_slot_indicator()
+
+    # ── Inherit / fill-forward helpers ────────────────────────────────────────
+
+    def _find_nearest_preceding_note(self, from_idx: int):
+        """Return (note_dict, path) of the closest preceding entry that has
+        at least one slot drawn, or (None, None) if none exists."""
+        for i in range(from_idx - 1, -1, -1):
+            path = self.entries[i]["local_path"]
+            note = self.notes.get(path)
+            if note and any(note.get(f"{sk}_w_px") for sk, *_ in SLOT_DEFS):
+                return note, path
+        return None, None
+
+    def _apply_inherited_slots(self, note: dict):
+        """Load all slot rectangles + dropdown fields from *note* into current view."""
+        self._slots = {}
+        for skey, *_ in SLOT_DEFS:
+            try:
+                wpx = int(note.get(f"{skey}_w_px") or 0)
+            except (ValueError, TypeError):
+                wpx = 0
+            if wpx > 0:
+                self._slots[skey] = {
+                    dim: note.get(f"{skey}_{dim}", "")
+                    for dim in ["x_px", "y_px", "w_px", "h_px",
+                                "x_pct", "y_pct", "w_pct", "h_pct"]
+                }
+        for key, var in self.field_vars.items():
+            val = note.get(key, "")
+            if val and val != "?":
+                var.set(val)
+
+    def _inherit_from_previous(self):
+        """Copy slot rects + fields from the nearest preceding reviewed file.
+        Does NOT auto-save — review visually then press Enter / Save+Next."""
+        source_note, source_path = self._find_nearest_preceding_note(self.idx)
+        if not source_note:
+            self.lbl_status.config(text="No preceding note with slot data found.")
+            return
+        self._apply_inherited_slots(source_note)
+        src_name = Path(source_path).name
+        # Only set the notes field if it's currently empty
+        if not self.notes_text.get("1.0", "end").strip():
+            self.notes_text.delete("1.0", "end")
+            self.notes_text.insert("1.0", f"inherited:{src_name}")
+        self._render_page()
+        self.lbl_status.config(
+            text=f"Inherited from: {src_name}  —  verify then Save+Next")
+
+    def _fill_unreviewed(self):
+        """Bulk-propagate: for every unreviewed entry, copy slot data from the
+        nearest preceding reviewed file that has slot data.
+        Writes 'inherited:<source>' in the notes field."""
+        noted_paths = set(self.notes.keys())
+        n_unreviewed = sum(1 for e in self.entries
+                          if e["local_path"] not in noted_paths)
+
+        if n_unreviewed == 0:
+            self.lbl_status.config(text="All entries already reviewed — nothing to fill.")
+            return
+
+        if not messagebox.askyesno(
+                "Fill Unreviewed",
+                f"Propagate slot data from nearest preceding reviewed file\n"
+                f"to {n_unreviewed} unreviewed entries?\n\n"
+                f"• Each entry gets notes='inherited:<source_file>'\n"
+                f"• Dropdown fields (grid_position, latlon_present, etc.) are copied\n"
+                f"• Entries before the very first reviewed file are skipped\n\n"
+                f"This CANNOT be undone (make a backup first if unsure)."):
+            return
+
+        now_str  = datetime.now().strftime("%Y-%m-%d %H:%M")
+        filled   = 0
+        skipped  = 0
+        last_note = None
+        last_path = None
+
+        for e in self.entries:
+            path = e["local_path"]
+            if path in noted_paths:
+                # Already reviewed — update running "last good note" pointer
+                note = self.notes[path]
+                if any(note.get(f"{sk}_w_px") for sk, *_ in SLOT_DEFS):
+                    last_note = note
+                    last_path = path
+            else:
+                # Unreviewed — inherit from last good note if available
+                if last_note is None:
+                    skipped += 1
+                    continue
+                src_name = Path(last_path).name
+                row = {
+                    "local_path":      path,
+                    "collection":      e["collection"],
+                    "year":            e["year"],
+                    "month":           e["month"],
+                    "position":        e["position"],
+                    "total_in_folder": e.get("total_in_folder", ""),
+                    "reviewed_at":     now_str,
+                    "notes":           f"inherited:{src_name}",
+                }
+                for key in self.field_vars:
+                    row[key] = last_note.get(key, "?")
+                for skey, *_ in SLOT_DEFS:
+                    for dim in ["x_px", "y_px", "w_px", "h_px",
+                                "x_pct", "y_pct", "w_pct", "h_pct"]:
+                        row[f"{skey}_{dim}"] = last_note.get(f"{skey}_{dim}", "")
+                self.notes[path] = row
+                filled += 1
+
+        if filled:
+            self._write_notes()
+
+        parts = [f"Filled {filled} entries with inherited slot data."]
+        if skipped:
+            parts.append(f"{skipped} skipped (before first reviewed file).")
+        parts.append("CSV saved.")
+        self.lbl_status.config(text="  ".join(parts))
 
     # ── OCR text popup ────────────────────────────────────────────────────────
 
@@ -853,10 +997,28 @@ class InspectionApp:
                     "w_pct": existing.get("sel_w_pct", ""),
                     "h_pct": existing.get("sel_h_pct", ""),
                 }
-        # Resume slot counter from however many slots exist
-        self._active_slot = min(len(self._slots), len(SLOT_DEFS))
+        # Auto-inherit from nearest preceding note if this file is unreviewed
+        # (slots are shown as a scaffold — not saved until user hits Enter)
+        _auto_src = None
+        if not self._slots and e["local_path"] not in self.notes:
+            _src_note, _src_path = self._find_nearest_preceding_note(self.idx)
+            if _src_note:
+                self._apply_inherited_slots(_src_note)
+                _auto_src = Path(_src_path).name
+
+        # Point active slot at the first empty slot (or slot 0 if all filled)
+        self._active_slot = next(
+            (j for j, (sk, *_) in enumerate(SLOT_DEFS) if sk not in self._slots),
+            0)
 
         self._render_page()
+
+        if _auto_src:
+            self.lbl_status.config(
+                text=f"Scaffold from: {_auto_src}  —  adjust if needed, Enter to save")
+        else:
+            self.lbl_status.config(
+                text="Click chip to pick slot  ->  drag to draw  |  X = clear active  |  Enter = save+next")
 
     def _render_page(self):
         e = self.entries[self.idx]
@@ -941,8 +1103,9 @@ def main():
 
     print(f"Loaded {len(entries)} PDFs from {folder}")
     print(f"Notes  -> {notes_path}")
-    print("Draw order: 1=GRID  2=COUNTY  3=STR  4=LAT/LON (skip if absent)")
-    print("X = undo last rectangle   Enter = save + next\n")
+    print("Click a slot chip to select it, then drag to draw that rectangle.")
+    print("Any order — draw LAT/LON only, skip GRID, etc.")
+    print("X = clear active slot   Enter = save + next\n")
 
     root = tk.Tk()
     try:

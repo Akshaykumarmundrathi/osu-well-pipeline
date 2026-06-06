@@ -161,13 +161,15 @@ MAX_LATLONG_PAGES_RETRY  = 99      # scan everything on retry
 MAX_COUNTY_PAGES         = 2
 MAX_COUNTY_PAGES_RETRY   = 99
 
-# Collections numbered below this never run the latlong stage — manual
-# inspection of older ExportedFolderContents (N).zip archives confirms
-# decimal-degree coordinates were not yet recorded on the forms. Saves
-# one Vision API call per record (~50% of stage time for resume runs).
+# Collections numbered below this never run the latlong stage.
+# Inspection data (Jun 2025):
+#   Coll 8  → ~1 % of forms have lat/lon  (too rare, skip)
+#   Coll 9  → ~10% have lat/lon           (worthwhile — enable)
+#   Coll 10 → ~18% have lat/lon           (worthwhile — enable)
+#   Coll 11+→ >85% have lat/lon           (dominant)
 # Authoritative source is now tier_for() + TIER_CONFIG['run_latlong'].
 # This constant is kept for backward compat with older code paths.
-LATLONG_MIN_COLLECTION_NUM = 11
+LATLONG_MIN_COLLECTION_NUM = 9
 
 # -- Retry heuristics ----------------------------------------------------------
 # Crop multiplier used by the county no_match retry strategy.
@@ -176,10 +178,21 @@ COUNTY_RETRY_CROP_SCALE  = 1.5
 LOCATION_MIN_OVERLAP     = 0.35
 LOCATION_MIN_OVERLAP_RETRY = 0.15
 # Grid size band: strict first pass, then relaxed on retry.
-GRID_W_STRICT = (280, 850)
-GRID_H_STRICT = (280, 850)
-GRID_W_LOOSE  = (150, 1200)
-GRID_H_LOOSE  = (150, 1200)
+#
+# Calibrated from Jun 2025 manual inspection of ~700 sampled PDFs across
+# all 13 collections (rendered at RESOLUTION_MULTIPLIER=2 → 1224×1584 px):
+#
+#   T2 medium grids (Colls 1–3, ~1911–1950):  W≈306px  H≈238–253px  AR≈1.21–1.29
+#   T3 small grids  (Colls 4–9, ~1951–1987):  W≈147–159px  H≈253–269px  AR≈0.58–0.63
+#   Mid-size grids  (Coll 10,   ~1988–2000):  W≈196px  H≈348px  AR≈0.56
+#   Returning med   (Coll 11+,  ~2001–2024):  W≈245px  H≈348px  AR≈0.70
+#
+# All three filters (W, H, AR) were blocking T3 and later grids.
+# The density filter (_MIN_LINE_DENSITY) handles false-positive rejection.
+GRID_W_STRICT = (120, 900)   # was (280, 850) — T3 minimum ~147px
+GRID_H_STRICT = (150, 900)   # was (280, 850) — T3 minimum ~238px
+GRID_W_LOOSE  = (90,  1200)  # was (150, 1200) — retry: catch absolute outliers
+GRID_H_LOOSE  = (90,  1200)  # was (150, 1200)
 
 # -- Processing ----------------------------------------------------------------
 MAX_WORKERS = max(1, os.cpu_count() - 1)
@@ -215,11 +228,22 @@ _TIER_BOUNDARIES = [
 ]
 
 TIER_DESCRIPTIONS = {
-    TIER_EARLY:      "Collections 1–6  (~1911–1940s) — STR keywords, no lat/lon",
-    TIER_TRANSITION: "Collections 7–8  (~1950s)       — mixed form layout",
-    TIER_MID:        "Collections 9–10 (~1960s–70s)   — Location: line dominant",
-    TIER_LATE:       "Collections 11–12 (~1980s–90s)  — lat/lon + Location:",
-    TIER_MODERN:     "Collections 13+  (~2000s–2024)  — decimal degrees routine",
+    TIER_EARLY:      "Collections 1–6  (1911–1970)  — printed SEC/TWP/RGE, 8×8 dot grid, no lat/lon",
+    TIER_TRANSITION: "Collections 7–8  (1971–1982)  — small grid (~13% wide), STR top-center, rare lat/lon",
+    TIER_MID:        "Collections 9–10 (1983–2000)  — grid shifts to top-center, lat/lon on ~10-18% of forms",
+    TIER_LATE:       "Collections 11–12 (2001–2018) — LOCATE WELL grid top-center/right, lat/lon dominant (>85%)",
+    TIER_MODERN:     "Collections 13+  (2019–2024)  — digital forms, decimal degrees standard",
+}
+
+# Grid zone hints per tier — where the dot-grid image typically appears.
+# Used by the anchor-crop system to set appropriate search margins.
+# Values: 'top-left' | 'top-center' | 'top-right' | 'bot-left'
+TIER_GRID_ZONES = {
+    TIER_EARLY:      ["bot-left", "top-left"],          # Coll 1 bot-left; Colls 2-6 top-left
+    TIER_TRANSITION: ["top-left"],                       # Colls 7-8: uniformly top-left
+    TIER_MID:        ["top-left", "top-center"],         # Coll 9 mixed; Coll 10 top-center (91%)
+    TIER_LATE:       ["top-center", "top-right"],        # Coll 11: center (80%) + right (17%)
+    TIER_MODERN:     ["top-left", "top-center", "top-right"],  # insufficient data — allow all
 }
 
 
@@ -253,13 +277,23 @@ def decade_for(year: str | int | None) -> str:
 # Per-tier flags. Add knobs here as the pipeline grows; consumers should
 # look up via tier_for() then index this dict.
 TIER_CONFIG = {
-    # run_latlong:   decimal lat/lon was not printed on forms before late tier
-    # run_location:  STR section/township/range is handwritten on early/transition forms
-    #                and completely unreadable by Tesseract — skip to save 50-150s per record
-    # location_strategy: which extractor to use when run_location=True
+    # run_latlong:   attempt lat/lon extraction (Vision OCR on page 1).
+    #                False for tiers where <2% of forms carry coordinates — not
+    #                worth the extra API call per record.
+    # run_location:  attempt SEC/TWP/RGE extraction via OCR keywords.
+    #                False for very early tiers where values are handwritten and
+    #                OCR quality is too low to be reliable.
+    # location_strategy: 'str_keywords'      → look for SEC/TWP/RGE labels
+    #                    'location_keyword'  → look for 'Location:' line
+    #
+    # Jun 2025 calibration from ~700 manually inspected samples:
+    #   EARLY:      no lat/lon; SEC/TWP/RGE handwritten → run_location=False
+    #   TRANSITION: <2% lat/lon (Coll 8); SEC/TWP/RGE printed → run_location=True
+    #   MID:        10-18% lat/lon (Coll 9-10); Location: line dominant
+    #   LATE+:      >85% lat/lon; Location: line + coordinates
     TIER_EARLY:      {"run_latlong": False, "run_location": False, "location_strategy": "str_keywords"},
-    TIER_TRANSITION: {"run_latlong": False, "run_location": False, "location_strategy": "str_keywords"},
-    TIER_MID:        {"run_latlong": False, "run_location": True,  "location_strategy": "location_keyword"},
+    TIER_TRANSITION: {"run_latlong": False, "run_location": True,  "location_strategy": "str_keywords"},
+    TIER_MID:        {"run_latlong": True,  "run_location": True,  "location_strategy": "location_keyword"},
     TIER_LATE:       {"run_latlong": True,  "run_location": True,  "location_strategy": "location_keyword"},
     TIER_MODERN:     {"run_latlong": True,  "run_location": True,  "location_strategy": "location_keyword"},
 }

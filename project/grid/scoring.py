@@ -63,7 +63,12 @@ _METHODS = [
     ("corners",  extract_grid_region_corners),
 ]
 
-_AR_MIN, _AR_MAX    = 0.78, 1.30   # accept slightly landscape / portrait grids
+# Aspect-ratio bounds for the detected grid bbox (width / height).
+# Inspection data shows T3 small grids (Colls 4-9) are portrait rectangles:
+#   W≈147-159px, H≈253-269px  →  AR≈0.58-0.63  (taller than wide)
+# Coll 10-11 grids: AR≈0.56-0.70.  Only the older T2/T1 grids are landscape (AR>1).
+# Lowered AR_MIN from 0.78→0.50 to accept portrait grids; raised AR_MAX slightly.
+_AR_MIN, _AR_MAX    = 0.50, 1.60
 _MIN_LINE_DENSITY   = 0.15         # fraction of H/V-line pixels that a real grid must have
 
 # Per-page wall-clock timeout.  Tesseract on noisy 1900s handwriting can spin

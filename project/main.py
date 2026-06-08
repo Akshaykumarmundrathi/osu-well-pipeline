@@ -759,9 +759,19 @@ def _process_record_worker(arg):
     parent which applies the returned `results` via _apply_results().
 
     Argument tuple is positional so it's cheap to pickle:
-      (record, stages, output_root_str, resume, prior_row, record_num, total)
+      (record, stages, output_root_str, resume, prior_row, record_num, total,
+       skip_failed)
+
+    skip_failed (bool, default False): when True, previously-failed stages are
+      treated as terminal and skipped without re-running.  Set by --no-retry so
+      a resumed run does NOT re-issue Vision API calls for deterministic failures.
     """
-    record, stages, output_root_str, resume, prior_row, record_num, total = arg
+    # Unpack — skip_failed is optional (backward-compat with older callers)
+    if len(arg) == 8:
+        record, stages, output_root_str, resume, prior_row, record_num, total, skip_failed = arg
+    else:
+        record, stages, output_root_str, resume, prior_row, record_num, total = arg
+        skip_failed = False
     paths   = OutputPathBuilder(Path(output_root_str))
     pdf_log = get_pdf_logger(record.pdf_stem, paths.log_path(record))
     pdf_log.debug("=== START %s ===", record.pdf_stem)
@@ -831,6 +841,13 @@ def _process_record_worker(arg):
         if resume and prior_status == SKIPPED:
             lines.append(f"  {label:<{_COL}}already skipped")
             results[stage] = SKIPPED
+            continue
+        if resume and skip_failed and prior_status == FAILED:
+            # --no-retry mode: treat previous failures as terminal — do NOT
+            # re-issue Vision API calls for deterministic failures.
+            lines.append(f"  {label:<{_COL}}already failed (no-retry)")
+            results[stage] = {"detected": False, "_was_failed": True,
+                              "error": prior_row.get(f"{stage}_error_type", "skipped_no_retry")}
             continue
 
         # Latlong collection gate (tier-aware).
@@ -1641,17 +1658,28 @@ def run_pipeline(args):
         month_done = month_failed = month_skipped = 0
 
         # Pre-filter resume-skips and assign stable record numbers.
+        skip_failed = not getattr(args, "retry", True)   # True when --no-retry
         work_items: list = []
         record_by_stem: dict = {}
         for record in month_recs:
             record_num += 1
-            if args.resume and all(status.is_done_or_skipped(record.pdf_stem, s) for s in stages):
+            # Fast-skip records where every stage is terminal.
+            # In normal resume mode: DONE|SKIPPED counts as terminal.
+            # In --no-retry mode:    FAILED also counts as terminal (no re-runs).
+            def _is_terminal(stem, stage):
+                s = status.get_status(stem, stage)
+                if s in (DONE, SKIPPED):
+                    return True
+                if skip_failed and s == FAILED:
+                    return True
+                return False
+            if args.resume and all(_is_terminal(record.pdf_stem, s) for s in stages):
                 month_skipped += 1
                 total_skipped += 1
                 continue
             prior = dict(status._rows.get(record.pdf_stem, {}))
             work_items.append((record, stages, str(paths.root), args.resume,
-                               prior, record_num, len(records)))
+                               prior, record_num, len(records), skip_failed))
             record_by_stem[record.pdf_stem] = record
 
         def _consume(result_iter):

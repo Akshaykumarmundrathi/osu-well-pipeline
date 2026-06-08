@@ -106,6 +106,12 @@ def _classify_error(error: str) -> str:
         return "not_found"
     if "invalid_crop" in e:
         return "invalid_crop"
+    # "no_change" is the sentinel returned by _retry_record when _retry_one_stage
+    # gives back None (no retry strategy).  It is NOT a real error type; callers
+    # should guard against it before calling mark_failed, but handle it gracefully
+    # here too so it never surfaces as "exception" in the CSV.
+    if e == "no_change":
+        return "not_detected"
     return "exception"
 
 

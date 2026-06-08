@@ -1430,11 +1430,17 @@ def _retry_record(record: DatasetRecord, stages: tuple,
         elapsed = time.monotonic() - t0
 
         label = _STAGE_LABEL.get(stage, stage)
+        if r is None:
+            # _retry_one_stage returned None: no retry strategy for this stage
+            # (e.g. dot is fully deterministic).  Keep the existing failure
+            # status unchanged rather than overwriting it with "no_change".
+            parts.append(f"{label} {et}->no_retry")
+            continue
         if r and r.get("detected"):
             status.mark_done(record.pdf_stem, stage, r)
             parts.append(f"{label} {et}->OK ({elapsed:.0f}s)")
         else:
-            new_err = (r.get("error") if r else "no_change") or "no_change"
+            new_err = r.get("error") or "no_change"
             status.mark_failed(record.pdf_stem, stage, new_err)
             _append_failed(record, stage, f"retry({et}): {new_err}",
                            output_root=paths.root)

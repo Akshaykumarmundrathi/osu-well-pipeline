@@ -161,7 +161,10 @@ class ProcessingStatus:
         never half-written.
         """
         self.csv_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.csv_path.with_suffix(self.csv_path.suffix + ".tmp")
+        # NOTE: Do NOT use ".tmp" extension — Windows Defender/CFA quarantines
+        # large .tmp files immediately after creation, causing the rename to fail.
+        # Use ".new" instead (plain text, no special-case treatment by AV).
+        tmp = self.csv_path.with_suffix(self.csv_path.suffix + ".new")
         pending_interrupt = None
         try:
             with tmp.open("w", newline="", encoding="utf-8") as f:
@@ -172,6 +175,16 @@ class ProcessingStatus:
         except KeyboardInterrupt as exc:
             # Finish writing before re-raising.
             pending_interrupt = exc
+        except Exception as exc:
+            # Any other write-side failure: log it and re-raise so the caller
+            # gets a clear traceback rather than a confusing FileNotFoundError
+            # from the rename step (tmp may not exist if open() itself failed).
+            import logging as _logging
+            _logging.getLogger(__name__).error(
+                "_save_locked write FAILED (%s: %s); tmp=%s exists=%s",
+                type(exc).__name__, exc, tmp, tmp.exists()
+            )
+            raise
         # On Windows another process (e.g. Excel) may hold a read lock on the
         # CSV briefly. Retry the atomic rename for up to ~5 seconds before
         # giving up — long enough to outlast transient locks without hanging.
@@ -179,9 +192,14 @@ class ProcessingStatus:
             try:
                 tmp.replace(self.csv_path)
                 break
-            except PermissionError:
+            except (PermissionError, FileNotFoundError) as exc:
                 if attempt == 9:
                     raise
+                import logging as _logging
+                _logging.getLogger(__name__).warning(
+                    "_save_locked rename attempt %d failed (%s): tmp=%s exists=%s",
+                    attempt, exc, tmp, tmp.exists()
+                )
                 time.sleep(0.5)
         if pending_interrupt is not None:
             raise pending_interrupt

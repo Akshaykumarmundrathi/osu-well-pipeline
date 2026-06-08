@@ -338,6 +338,7 @@ def phase_pipeline(index_path: Path, workers: int):
          "--resume",
          "--no-retry"],
         cwd=PROJECT_DIR,
+        env={"PYTHONUTF8": "1"},   # force UTF-8 stdout so box-drawing chars don't crash
     )
     elapsed = time.monotonic() - t0
     if rc != 0:

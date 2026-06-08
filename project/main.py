@@ -116,8 +116,16 @@ _COL = 14   # label column width
 
 
 def _p(msg: str = ""):
-    """Flushing print — guarantees the line lands in real time."""
-    print(msg, flush=True)
+    """Flushing print — guarantees the line lands in real time.
+    Falls back to ASCII-safe output on narrow console encodings (e.g. cp1252).
+    """
+    try:
+        print(msg, flush=True)
+    except UnicodeEncodeError:
+        safe = msg.encode(sys.stdout.encoding or "utf-8", errors="replace").decode(
+            sys.stdout.encoding or "utf-8"
+        )
+        print(safe, flush=True)
 
 
 def _banner(msg: str):

@@ -193,6 +193,100 @@ def _per_keyword_extract(annotations, keyword_boxes: dict, page_w: int,
     return sec, twp, rng
 
 
+# -- Vertical label-over-value extraction (Strategy 4) -----------------------
+# Used for Collection 11+ "LATE" form layout where the Section, Township, and
+# Range labels appear as column headers with their values directly below:
+#
+#   County    SEC    TWP    RGE
+#   Garvin    15     23N    10W
+#
+# OR in a stacked single-column layout:
+#   County       SEC        TWP        RGE
+#   Garvin       15         23N        10W
+#
+# Algorithm: find tokens whose text matches a field label; for each label
+# find the closest non-label token BELOW it within the expected distance.
+
+# Labels recognised in vertical layout (matches Collection 11+ form headers).
+_VLABEL_SEC = re.compile(r"^sec(?:tion|t)?\.?$", re.I)
+_VLABEL_TWP = re.compile(r"^(?:t(?:ownship|wp|wn|vp)?\.?)$", re.I)
+_VLABEL_RNG = re.compile(r"^(?:r(?:ange|ge)?\.?)$", re.I)
+# All three combined for quick "is this a label?" check.
+_VLABEL_ANY = re.compile(
+    r"^(?:sec(?:tion|t)?|t(?:ownship|wp|wn|vp)?|r(?:ange|ge)?|county)\.?$",
+    re.I,
+)
+
+
+def _extract_str_vertical(annotations) -> tuple[str, str, str]:
+    """
+    Strategy 4: vertical label-over-value extraction for Collection 11+.
+
+    Scans all OCR tokens to find SEC/TWP/RGE label tokens, then reads the
+    first non-label token appearing directly below each label (same x-band,
+    within max_dy pixels).
+
+    Returns (section, township, range) — any field that cannot be resolved
+    is returned as ''.
+
+    Tolerances:
+      x_tol  = 55 px  (label and value must share the same column)
+      min_dy = 10 px  (value is strictly below the label bottom edge)
+      max_dy = 160 px (no further away than ~2 line heights)
+    """
+    if not annotations or len(annotations) < 2:
+        return "", "", ""
+
+    # Build list of (cx, cy, bottom_y, text) for all tokens.
+    tokens = []
+    for ann in annotations[1:]:
+        poly = ann.bounding_poly
+        if not poly or not poly.vertices:
+            continue
+        try:
+            xs = [v.x for v in poly.vertices]
+            ys = [v.y for v in poly.vertices]
+            cx, cy = sum(xs) / len(xs), sum(ys) / len(ys)
+            bot_y  = max(ys)
+            tokens.append((cx, cy, bot_y, (ann.description or "").strip()))
+        except Exception:
+            continue
+
+    if not tokens:
+        return "", "", ""
+
+    # Find the first label token matching each field type.
+    sec_label = next(((cx, cy, by, t) for cx, cy, by, t in tokens
+                      if _VLABEL_SEC.match(t)), None)
+    twp_label = next(((cx, cy, by, t) for cx, cy, by, t in tokens
+                      if _VLABEL_TWP.match(t)), None)
+    rng_label = next(((cx, cy, by, t) for cx, cy, by, t in tokens
+                      if _VLABEL_RNG.match(t)), None)
+
+    x_tol, min_dy, max_dy = 55, 10, 160
+
+    def _value_below(label_tuple) -> str:
+        """Return the closest non-label token directly below the given label."""
+        if label_tuple is None:
+            return ""
+        lx, _, l_bot, _ = label_tuple
+        candidates = []
+        for cx, cy, _, t in tokens:
+            if abs(cx - lx) > x_tol:
+                continue
+            dy = cy - l_bot
+            if min_dy <= dy <= max_dy and not _VLABEL_ANY.match(t):
+                candidates.append((dy, t))
+        if candidates:
+            return min(candidates)[1]
+        return ""
+
+    sec = _validate_section(_value_below(sec_label))
+    twp = _validate_twprng(_value_below(twp_label))
+    rng = _validate_twprng(_value_below(rng_label))
+    return sec, twp, rng
+
+
 # -- Gemini STR fallback (Strategy 3) -----------------------------------------
 # Mirrors the original phaseI.py / OSU_WELL_CHECKPOINT1.py approach:
 # preprocess the crop → send to Gemini Flash → parse structured response.
@@ -286,19 +380,29 @@ def process_single_location(
     padding_height: int = 50,
     section_right_extension: int = 200,
     min_overlap: float | None = None,
+    str_strategy_hint: str | None = None,
 ) -> dict:
     """
-    Scan pages for section/township/range. Try grouped pairing first;
-    fall back to per-keyword right-side extraction. Returns the result
-    dict with `detected` True only if >=2 of the 3 fields are populated.
+    Scan pages for section/township/range. Strategy order:
 
-    `min_overlap` overrides the strict default (config.LOCATION_MIN_OVERLAP).
+    1. Grouped-keyword pairing (vertical-overlap alignment of SEC/TWP/RGE boxes).
+    2. Per-keyword right-side extraction (fallback when grouping fails).
+    3. Gemini Flash on the keyword-crop (last resort when OCR quality is poor).
+    4. Vertical label-over-value extraction — for Collection 11+ "LATE" layout
+       where field labels and values appear as column header / value rows.
+
+    ``str_strategy_hint`` from the form classifier controls execution order:
+    - ``"vertical_stack"`` → Strategy 4 runs FIRST (before strategies 1-3).
+    - Any other value     → strategies 1→2→3 in the usual order, then 4 last.
+
+    ``min_overlap`` overrides the strict default (config.LOCATION_MIN_OVERLAP).
     Retry path passes the loose value for a second chance.
     """
     log = logger or logging.getLogger(__name__)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     overlap = min_overlap if min_overlap is not None else LOCATION_MIN_OVERLAP
+    prefer_vertical = (str_strategy_hint == "vertical_stack")
 
     result = {
         "detected": False, "page": None,
@@ -335,29 +439,52 @@ def process_single_location(
             sec = twp = rng = ""
             raw_text = ""
             crop_box = None
+            strat_used = ""
+
+            # -- Strategy 4 EARLY: vertical label-over-value (LATE form layout) --
+            # When the form classifier signals a "vertical_stack" layout (Collection
+            # 11+ top-right grid) try the vertical extractor FIRST, before the
+            # horizontal grouping strategies.  This prevents the grouping from
+            # wasting time on a layout it cannot handle.
+            if prefer_vertical:
+                v_sec, v_twp, v_rng = _extract_str_vertical(annotations)
+                if sum(bool(v) for v in (v_sec, v_twp, v_rng)) >= 2:
+                    sec, twp, rng = v_sec, v_twp, v_rng
+                    raw_text = f"vertical: sec={sec} twp={twp} rng={rng}"
+                    strat_used = "vertical"
+                    log.debug("Strategy 4 (vertical-first): sec=%s twp=%s rng=%s",
+                              sec, twp, rng)
+
+            found = sum(bool(v) for v in (sec, twp, rng))
 
             # -- Strategy 1: grouped extraction ----------------------------
-            group = choose_group(sections, townships, ranges,
-                                 min_overlap=overlap)
-            if group is not None:
-                unified_box = get_unified_bounding_box(group, section_right_extension)
-                if unified_box is not None:
-                    pw, ph = pil_image.size
-                    x0 = max(0, int(unified_box[0]))
-                    y0 = max(0, int(unified_box[1]))
-                    x1 = min(pw, int(unified_box[2]))
-                    y1 = min(ph, int(unified_box[3]))
-                    if x1 > x0 and y1 > y0:
-                        crop_box = (x0, y0, x1, y1)
-                        # Extended box: wider + taller to capture quadrant labels
-                        # (they appear in the same legal description block)
-                        ext = 250
-                        ex0 = max(0,  x0 - ext)
-                        ey0 = max(0,  y0 - ext)
-                        ex1 = min(pw, x1 + ext)
-                        ey1 = min(ph, y1 + ext)
-                        raw_text = _annotations_in_box(annotations, ex0, ey0, ex1, ey1)
-                        sec, twp, rng = _extract_str(raw_text)
+            if found < 2:
+                group = choose_group(sections, townships, ranges,
+                                     min_overlap=overlap)
+                if group is not None:
+                    unified_box = get_unified_bounding_box(group, section_right_extension)
+                    if unified_box is not None:
+                        pw, ph = pil_image.size
+                        x0 = max(0, int(unified_box[0]))
+                        y0 = max(0, int(unified_box[1]))
+                        x1 = min(pw, int(unified_box[2]))
+                        y1 = min(ph, int(unified_box[3]))
+                        if x1 > x0 and y1 > y0:
+                            crop_box = (x0, y0, x1, y1)
+                            # Extended box: wider + taller to capture quadrant labels
+                            # (they appear in the same legal description block)
+                            ext = 250
+                            ex0 = max(0,  x0 - ext)
+                            ey0 = max(0,  y0 - ext)
+                            ex1 = min(pw, x1 + ext)
+                            ey1 = min(ph, y1 + ext)
+                            raw_text = _annotations_in_box(annotations, ex0, ey0, ex1, ey1)
+                            g1_sec, g1_twp, g1_rng = _extract_str(raw_text)
+                            sec = sec or g1_sec
+                            twp = twp or g1_twp
+                            rng = rng or g1_rng
+                            if not strat_used:
+                                strat_used = "grouped"
 
             found = sum(bool(v) for v in (sec, twp, rng))
 
@@ -375,6 +502,8 @@ def process_single_location(
                 found = sum(bool(v) for v in (sec, twp, rng))
                 if not raw_text:
                     raw_text = f"sec={sec} twp={twp} rng={rng}"
+                if not strat_used:
+                    strat_used = "per_keyword"
 
             # -- Strategy 3: Gemini on the crop (matches original phaseI.py) --
             # When OCR regex + per-keyword both failed to yield ≥2 fields,
@@ -392,13 +521,30 @@ def process_single_location(
                 found = sum(bool(v) for v in (sec, twp, rng))
                 if found > 0 and raw_text == "":
                     raw_text = f"gemini: sec={sec} twp={twp} rng={rng}"
+                if not strat_used and found > 0:
+                    strat_used = "gemini"
+
+            # -- Strategy 4 LATE: vertical label-over-value (normal order) -----
+            # For non-LATE form types, try vertical extraction as a last resort
+            # after all horizontal strategies have failed.
+            if found < 2 and not prefer_vertical:
+                v_sec, v_twp, v_rng = _extract_str_vertical(annotations)
+                sec = sec or v_sec
+                twp = twp or v_twp
+                rng = rng or v_rng
+                found = sum(bool(v) for v in (sec, twp, rng))
+                if found > 0 and not raw_text:
+                    raw_text = f"vertical: sec={sec} twp={twp} rng={rng}"
+                if not strat_used and found > 0:
+                    strat_used = "vertical"
 
             if found < 2:
                 continue
 
-            # Confidence: 3-strategy scoring.
-            # OCR regex (strat 1/2) → up to 100; Gemini fallback (strat 3) → 75 cap.
-            gemini_used = raw_text.startswith("gemini:")
+            # Confidence: strategy-weighted scoring.
+            # grouped/per-keyword/vertical OCR → up to 100 (based on fields found).
+            # Gemini fallback → 75 cap (less reliable for exact numbers).
+            gemini_used = strat_used == "gemini"
             conf = min(75, (found * 100) // 3) if gemini_used else (found * 100) // 3
 
             # Save crop + annotated page when we have a crop box.

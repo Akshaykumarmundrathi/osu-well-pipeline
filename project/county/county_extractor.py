@@ -146,6 +146,9 @@ def _tokens_left_of(annotations, kw_box, max_tokens: int = 4,
     immediately to the LEFT of `kw_box` and share its vertical band
     (within +/- same_line_tol pixels of the keyword's y-centre).
 
+    Handles the most common county format: "<name> County"
+    (the name precedes the printed word "County").
+
     Vertical tolerance is generous (35 px) to catch cursive / handwritten
     county names that wobble slightly off the baseline of the printed
     "County" keyword.
@@ -180,18 +183,135 @@ def _tokens_left_of(annotations, kw_box, max_tokens: int = 4,
     return " ".join(desc for _, desc in tail)
 
 
+def _tokens_right_of(annotations, kw_box, max_tokens: int = 4,
+                     same_line_tol: int = 35) -> str:
+    """
+    Return the text of up to `max_tokens` annotation tokens that sit
+    immediately to the RIGHT of `kw_box` on the same horizontal line.
+
+    Handles the "County: <name>" format — the name follows the keyword and
+    optional colon.  Colons that appear as stand-alone OCR tokens are
+    stripped from the returned text.
+
+    Example input tokens right of 'County':  [':', 'Oklahoma']
+    Returns: 'Oklahoma'
+    """
+    if kw_box is None or not annotations:
+        return ""
+    kx0, ky0, kx1, ky1 = kw_box
+    ky_mid = (ky0 + ky1) / 2
+
+    candidates = []
+    for ann in annotations[1:]:
+        poly = ann.bounding_poly
+        if not poly or not poly.vertices:
+            continue
+        try:
+            xs = [v.x for v in poly.vertices]
+            ys = [v.y for v in poly.vertices]
+            cx  = sum(xs) / len(xs)
+            cy  = sum(ys) / len(ys)
+            x_min = min(xs)
+        except Exception:
+            continue
+        if x_min <= kx1:                       # not to the right
+            continue
+        if abs(cy - ky_mid) > same_line_tol:   # not on the same line
+            continue
+        candidates.append((cx, ann.description))
+
+    # Sort by x ascending; take the leftmost `max_tokens` (those nearest keyword).
+    candidates.sort(key=lambda t: t[0])
+    head = candidates[:max_tokens]
+    # Strip leading colon artefacts (e.g. the ':' after "County:").
+    texts = [re.sub(r'^[:]+\s*', '', desc).strip() for _, desc in head]
+    return " ".join(t for t in texts if t)
+
+
+def _tokens_below_keyword(annotations, kw_box, max_tokens: int = 2,
+                           x_tol: int = 80, min_dy: int = 5,
+                           max_dy: int = 120) -> str:
+    """
+    Return text of up to `max_tokens` tokens directly BELOW `kw_box`.
+
+    Handles the stacked / tabular format used in Collection 11+ forms:
+        County          ← keyword box
+        Garvin          ← value directly below
+
+    or the tabular row layout:
+        County   SEC   TWP   RGE
+        Garvin   15    23N   10W
+
+    `x_tol`  : horizontal tolerance (px) — the value must be roughly
+               centred on the keyword's x-centre to avoid grabbing an
+               adjacent field's value.
+    `min_dy` : minimum distance below keyword bottom edge (avoids same-line).
+    `max_dy` : maximum distance below keyword bottom edge (avoids next section).
+    """
+    if kw_box is None or not annotations:
+        return ""
+    kx0, ky0, kx1, ky1 = kw_box
+    kx_mid = (kx0 + kx1) / 2
+
+    candidates = []
+    for ann in annotations[1:]:
+        poly = ann.bounding_poly
+        if not poly or not poly.vertices:
+            continue
+        try:
+            xs = [v.x for v in poly.vertices]
+            ys = [v.y for v in poly.vertices]
+            cx = sum(xs) / len(xs)
+            cy = sum(ys) / len(ys)
+        except Exception:
+            continue
+        if abs(cx - kx_mid) > x_tol:          # not vertically aligned
+            continue
+        dy = cy - ky1                          # distance below keyword bottom
+        if min_dy <= dy <= max_dy:
+            candidates.append((dy, ann.description))
+
+    candidates.sort(key=lambda t: t[0])       # closest first
+    head = candidates[:max_tokens]
+    return " ".join(desc for _, desc in head)
+
+
 def _try_structural_anchor(annotations, kw_box, log) -> tuple[str, int]:
     """
-    Fuzzy-match the tokens left of the County keyword. Returns
-    (matched_name, fuzzy_score) or ("", 0) if below threshold.
+    Fuzzy-match tokens around the County keyword using three strategies:
+
+    1. **LEFT**  of keyword — handles "<name> County" (most common format;
+       name is written to the left of the printed word "County").
+    2. **RIGHT** of keyword — handles "County: <name>" (colon format used
+       in some Collection 9–11 printed forms).
+    3. **BELOW** keyword   — handles stacked / tabular format used in
+       Collection 11+ ("County" label on one line, "Garvin" on the next).
+
+    Returns the first strategy that produces a match at or above
+    FUZZY_MATCH_THRESHOLD.  If no strategy clears the threshold, returns
+    the best (name, score) pair found across all three so the caller can
+    use it as a weak fallback.
     """
-    text = _tokens_left_of(annotations, kw_box, max_tokens=4)
-    if not text:
-        return "", 0
-    name, score = _fuzzy_match(text)
-    log.debug("County structural anchor: text=%r -> %r score=%d",
-              text, name, score)
-    return name, score
+    best_name, best_score = "", 0
+
+    for strategy_fn, label in [
+        (_tokens_left_of,        "left"),
+        (_tokens_right_of,       "right"),
+        (_tokens_below_keyword,  "below"),
+    ]:
+        text = strategy_fn(annotations, kw_box)
+        if not text:
+            continue
+        name, score = _fuzzy_match(text)
+        log.debug("County anchor (%s): text=%r -> %r score=%d",
+                  label, text, name, score)
+        if name and score >= RETRY_CONFIDENCE_THRESHOLD:
+            # High-confidence hit — return immediately, no Gemini needed.
+            return name, score
+        if name and score > best_score:
+            best_name, best_score = name, score
+
+    return best_name, best_score
 
 
 # -- Per-page logic ------------------------------------------------------------

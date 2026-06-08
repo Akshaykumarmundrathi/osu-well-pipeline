@@ -901,6 +901,14 @@ def _process_record_worker(arg):
         if stage == STAGE_DOT:
             extra_kw["grid_dir"] = paths.grids_dir(record)
             extra_kw["output_root"] = paths.root
+        # Pass the grid result to location + county dispatch so form-type
+        # hints (str_zone, str_strategy_hint, county_format_hint) can bias
+        # their search regions.  The grid result is only available when
+        # STAGE_GRID has already run in this pipeline pass; for resume runs
+        # where STAGE_GRID was already marked done, grid_result may be None
+        # (the hints are then ignored and full-page search is used).
+        if stage in (STAGE_LOCATION, STAGE_COUNTY):
+            extra_kw["grid_result"] = results.get(STAGE_GRID)
         try:
             r = _dispatch(stage, manager, stage_dirs[stage],
                           record.pdf_stem, pdf_log, record=record, **extra_kw)
@@ -1101,6 +1109,7 @@ def _dispatch(stage: str, manager: PDFDocumentManager,
               record: DatasetRecord | None = None,
               grid_dir: Path | None = None,
               output_root: Path | None = None,
+              grid_result: dict | None = None,
               **kwargs) -> dict:
     """
     Route a stage name to its extractor entry point. Lazy-imports each
@@ -1109,6 +1118,12 @@ def _dispatch(stage: str, manager: PDFDocumentManager,
     Strategy selection is tier-aware: collections 9+ use the
     'Location:' keyword extractor by default, while early collections
     use the classic sec/twp/rge keyword pairing.
+
+    ``grid_result``: the dict returned by process_single_grid() for this
+    record (if the grid stage has already run in this pass).  When present,
+    the form-type hints (``str_strategy_hint``, ``county_format_hint``,
+    ``str_zone``) from the classifier are forwarded to the location and
+    county extractors so they can bias their search to the correct region.
     """
     if stage == STAGE_LATLONG:
         from latlong.latlong_extractor import process_single_latlong
@@ -1121,6 +1136,11 @@ def _dispatch(stage: str, manager: PDFDocumentManager,
         # Always attempt the anchor pass; falls through to full-page CV if not found.
         return process_single_grid(manager, out_dir, pdf_stem, log,
                                    skip_anchor=False)
+
+    # -- Extract form-type hints from grid result (may be None) ----------------
+    _gres = grid_result if isinstance(grid_result, dict) else {}
+    _str_strategy_hint  = _gres.get("str_strategy_hint")
+    _county_format_hint = _gres.get("county_format_hint")
 
     if stage == STAGE_LOCATION:
         from config import TIER_CONFIG, tier_for
@@ -1140,14 +1160,15 @@ def _dispatch(stage: str, manager: PDFDocumentManager,
             if result.get("detected"):
                 return result
 
-            # Fallback: classic SEC/TWP/RGE keyword extractor.
-            # Necessary for historical form types that recur in later collections:
-            #   - Coll 10 (~1999): "Bottom-left Spot Well Correctly" T2 forms
-            #   - Coll 11 (~2016): "Bottom-left / Top-left" early-style forms
-            # These use three separate SEC/TWP/RGE label columns, not a Location: line.
+            # Fallback: classic SEC/TWP/RGE keyword extractor, with the form-
+            # type hint so it tries vertical-stack extraction first when the
+            # grid was classified as LATE (Collection 11+, top-right zone).
             log.debug("location_keyword strategy not detected — falling back to str_keywords")
             from location.location_extractor import process_single_location
-            fallback = process_single_location(manager, out_dir, pdf_stem, log)
+            fallback = process_single_location(
+                manager, out_dir, pdf_stem, log,
+                str_strategy_hint=_str_strategy_hint,
+            )
             if fallback.get("detected"):
                 fallback["strategy_used"] = "str_keywords_fallback"
                 return fallback
@@ -1156,10 +1177,16 @@ def _dispatch(stage: str, manager: PDFDocumentManager,
             return result
 
         from location.location_extractor import process_single_location
-        return process_single_location(manager, out_dir, pdf_stem, log)
+        return process_single_location(
+            manager, out_dir, pdf_stem, log,
+            str_strategy_hint=_str_strategy_hint,
+        )
 
     if stage == STAGE_COUNTY:
         from county.county_extractor import process_single_county
+        # county_format_hint is stored in the grid result but the extractor
+        # currently tries all three strategies automatically; the hint is
+        # forwarded for logging / future prioritisation (not a hard constraint).
         return process_single_county(manager, out_dir, pdf_stem, log)
 
     if stage == STAGE_DOT:

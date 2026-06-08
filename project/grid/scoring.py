@@ -44,6 +44,7 @@ from config import (
     GRID_W_LOOSE, GRID_W_STRICT,
 )
 from grid.anchors import crop_box_from_anchor, find_grid_anchor
+from grid.form_classifier import classify_form_type
 from grid.extractors import (
     extract_grid_region_adaptive,
     extract_grid_region_canny,
@@ -184,12 +185,12 @@ def _try_anchor_on_page(manager, page_num_1indexed, cv_img,
 
     anchor_bbox, pos, phrase = find_grid_anchor(annotations)
     if anchor_bbox is None:
-        return None, None, None
+        return None, None, None, None
 
     ph, pw = cv_img.shape[:2]
     crop_box = crop_box_from_anchor(anchor_bbox, pos, pw, ph)
     if crop_box is None:
-        return None, None, None
+        return None, None, None, None
 
     cx0, cy0, cx1, cy1 = crop_box
     region = cv_img[cy0:cy1, cx0:cx1]
@@ -197,14 +198,15 @@ def _try_anchor_on_page(manager, page_num_1indexed, cv_img,
         region, w_min, w_max, h_min, h_max,
     )
     if grid_img is None:
-        return None, None, None
+        return None, None, None, None
 
     # Translate the bbox back into full-page coordinates.
     bx, by, bw, bh = bbox
     full_bbox = (bx + cx0, by + cy0, bw, bh)
     log.info("Grid via anchor %r on page %d (%s of anchor)",
              phrase, page_num_1indexed, pos)
-    return grid_img, full_bbox, f"anchor_{pos}_{method}"
+    # Return phrase so the caller can pass it to classify_form_type().
+    return grid_img, full_bbox, f"anchor_{pos}_{method}", phrase
 
 
 def process_single_grid(
@@ -248,7 +250,11 @@ def process_single_grid(
     page_order = lambda pages: pages
 
     result = {"detected": False, "page": None, "bbox": None,
-              "method": None, "confidence": 0, "image_path": None}
+              "method": None, "confidence": 0, "image_path": None,
+              # Form-type classification fields (populated after detection).
+              "form_type": None, "grid_zone": None,
+              "str_zone": None, "county_format_hint": None,
+              "str_strategy_hint": None, "anchor_phrase": None}
 
     try:
         pages = list(manager.iter_cv2_pages())
@@ -258,11 +264,12 @@ def process_single_grid(
                 _old_handler = signal.signal(signal.SIGALRM, _sigalrm_handler)
                 signal.alarm(_PAGE_TIMEOUT_S)
             try:
+                anchor_phrase_found = None
                 # Strategy 1: structural anchor + crop.
                 # Skipped for early/transition tier: handwritten docs have no
                 # printed anchor phrase and Tesseract just spins uselessly.
                 if not skip_anchor:
-                    grid_img, bbox, method = _try_anchor_on_page(
+                    grid_img, bbox, method, anchor_phrase_found = _try_anchor_on_page(
                         manager, page_num, cv_img, w_min, w_max, h_min, h_max, log,
                     )
                 else:
@@ -297,9 +304,34 @@ def process_single_grid(
 
             log.info("Grid -- page %d  method=%s  bbox=%s  density=%.3f  conf=%d  mode=%s",
                      page_num, method, bbox, density, conf, mode)
-            result.update(detected=True, page=page_num, bbox=list(bbox),
-                          method=method, confidence=conf,
-                          image_path=str(out_path))
+
+            # Classify the form type so downstream stages (location, county)
+            # can restrict their search to the expected page region.
+            ph, pw = cv_img.shape[:2]
+            bx, by, bw, bh = bbox
+            ar_detected = bw / bh if bh > 0 else 1.0
+            form_info = classify_form_type(
+                grid_bbox=(bx, by, bw, bh),
+                page_w=pw, page_h=ph,
+                anchor_phrase=anchor_phrase_found,
+                grid_ar=ar_detected,
+            )
+            log.info("Form classifier: %s  zone=%s  str_zone=%s  ar=%.2f",
+                     form_info["form_type"], form_info["grid_zone"],
+                     form_info["str_zone"], ar_detected)
+
+            result.update(
+                detected=True, page=page_num, bbox=list(bbox),
+                method=method, confidence=conf,
+                image_path=str(out_path),
+                # Form-type classification — consumed by location + county dispatch
+                form_type=form_info["form_type"],
+                grid_zone=form_info["grid_zone"],
+                str_zone=form_info["str_zone"],
+                county_format_hint=form_info["county_format_hint"],
+                str_strategy_hint=form_info["str_strategy_hint"],
+                anchor_phrase=anchor_phrase_found,
+            )
             return result
 
     except Exception as exc:

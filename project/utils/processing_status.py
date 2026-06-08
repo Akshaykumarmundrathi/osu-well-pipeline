@@ -153,12 +153,15 @@ class ProcessingStatus:
 
     def _save_locked(self):
         """
-        Write CSV to .tmp then rename — MUST be called with self._lock held.
+        Write CSV to a sibling .new file then rename — MUST be called with
+        self._lock held.
 
-        Writes to a sibling .tmp file first, then renames over the
-        original — atomic on Windows/POSIX. Ctrl-C during the write
-        is deferred until after the rename so the on-disk file is
-        never half-written.
+        Uses .new (not .tmp) extension: Windows Defender quarantines large
+        .tmp files immediately after creation, causing the rename to fail.
+
+        Write-then-rename is atomic on Windows/POSIX. Ctrl-C during the write
+        is deferred until after the rename so the on-disk file is never
+        half-written.
         """
         self.csv_path.parent.mkdir(parents=True, exist_ok=True)
         # NOTE: Do NOT use ".tmp" extension — Windows Defender/CFA quarantines

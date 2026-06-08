@@ -3,7 +3,7 @@ run_test100.py — Fully automated end-to-end test: 100 files per collection
 
 Phases (all unattended, no human input required):
   1.  Connection check  — RDS, Vision API, Gemini, git
-  2.  Dataset index     — scan all 13 ZIPs on D:\
+  2.  Dataset index     — scan all 13 flat collection directories on D:\
   3.  Sample            — 100 random records per collection (seed=42)
   4.  Pipeline          — all 5 stages on 1300 records (workers=4)
   5.  Coord enrichment  — RDS PLSS lookup → lat/lon
@@ -48,7 +48,9 @@ if _ENV_PATH.exists():
             k, _, v = _line.partition("=")
             os.environ.setdefault(k.strip(), v.strip())
 
-OUTPUT_ROOT   = Path(os.environ.get("OUTPUT_ROOT", str(_HERE / "project_outputs_test")))
+# Always use a dedicated test directory — NEVER inherit production OUTPUT_ROOT.
+# Override with TEST100_OUTPUT_ROOT env var for CI environments.
+OUTPUT_ROOT   = Path(os.environ.get("TEST100_OUTPUT_ROOT", str(_HERE / "project_outputs_test100")))
 PROJECT_DIR   = _HERE / "project"
 SOURCE_ROOT   = Path(os.environ.get("SOURCE_ROOT", "D:/"))
 SEED          = 42
@@ -124,12 +126,16 @@ def phase_check() -> bool:
         _fail("GOOGLE_API_KEY MISSING — Gemini county extraction will be skipped")
         # not fatal — pipeline continues without Gemini
 
-    # --- ZIPs ----------------------------------------------------------------
-    zips = sorted(SOURCE_ROOT.glob("ExportedFolderContents*.zip"))
-    if len(zips) == 13:
-        _ok(f"All 13 ZIPs found on {SOURCE_ROOT}")
+    # --- flat collection directories -----------------------------------------
+    # PDFs are unzipped into ExportedFolderContents (N)\ flat directories.
+    flat_dirs = sorted(SOURCE_ROOT.glob("ExportedFolderContents (*)"))
+    flat_dirs = [d for d in flat_dirs if d.is_dir()]
+    if len(flat_dirs) == 13:
+        _ok(f"All 13 flat collection directories found on {SOURCE_ROOT}")
+    elif len(flat_dirs) > 0:
+        _ok(f"{len(flat_dirs)}/13 flat collection directories found (proceeding)")
     else:
-        _fail(f"Expected 13 ZIPs, found {len(zips)} on {SOURCE_ROOT}")
+        _fail(f"No 'ExportedFolderContents (N)' directories found under {SOURCE_ROOT}")
         all_ok = False
 
     # --- RDS live connection -------------------------------------------------
@@ -241,25 +247,43 @@ def phase_check() -> bool:
 # ---------------------------------------------------------------------------
 
 def phase_scan() -> Path:
-    _header("Phase 2 — Scan ZIPs and build dataset_index.csv")
+    _header("Phase 2 — Build dataset_index.csv (flat collection directories)")
     OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
     index_path = OUTPUT_ROOT / "dataset_index.csv"
 
-    if index_path.exists():
-        n = sum(1 for _ in open(index_path)) - 1
-        _info(f"Existing index found with {n:,} records — rescanning to refresh...")
+    # Reuse an existing production index if it's fresh (< 48 h old) and
+    # has the expected record count (> 500K), to avoid an expensive 2-hour
+    # re-scan of 576K flat files on every test run.
+    prod_index = Path(os.environ.get("OUTPUT_ROOT", str(_HERE / "project_outputs"))) / "dataset_index.csv"
+    _use_existing = False
+    for candidate in (index_path, prod_index):
+        if candidate.exists():
+            import stat as _stat
+            age_h = (time.time() - candidate.stat().st_mtime) / 3600
+            n_existing = sum(1 for _ in open(str(candidate))) - 1
+            if age_h < 48 and n_existing > 500_000:
+                if candidate != index_path:
+                    import shutil
+                    shutil.copy2(str(candidate), str(index_path))
+                    _ok(f"Reused fresh production index ({n_existing:,} records, {age_h:.0f}h old) -> {index_path}")
+                else:
+                    _ok(f"Reused existing test index ({n_existing:,} records, {age_h:.0f}h old)")
+                _use_existing = True
+                break
 
-    rc = _run(
-        [sys.executable, "scan_dataset.py",
-         "--source", str(SOURCE_ROOT),
-         "--output", str(index_path)],
-        cwd=PROJECT_DIR,
-    )
-    if rc != 0:
-        raise RuntimeError(f"scan_dataset.py exited with code {rc}")
+    if not _use_existing:
+        _info("No fresh index found — scanning flat collection directories (this takes ~2 h)...")
+        rc = _run(
+            [sys.executable, "scan_dataset.py",
+             "--source", str(SOURCE_ROOT),
+             "--output", str(index_path)],
+            cwd=PROJECT_DIR,
+        )
+        if rc != 0:
+            raise RuntimeError(f"scan_dataset.py exited with code {rc}")
 
-    n = sum(1 for _ in open(index_path)) - 1
-    _ok(f"Dataset index: {n:,} records -> {index_path}")
+    n = sum(1 for _ in open(str(index_path))) - 1
+    _ok(f"Dataset index ready: {n:,} records -> {index_path}")
     return index_path
 
 

@@ -30,8 +30,7 @@ from PIL import Image as PILImage
 # -------------------------------------------------------------------
 # Paths
 # -------------------------------------------------------------------
-THIS_DIR    = Path(__file__).parent
-PROJECT_DIR = THIS_DIR / "project"
+THIS_DIR    = Path(__file__).parent   # D:\project_modular\project
 OUT_DIR     = THIS_DIR / "outputs_1911"
 GRID_DIR    = OUT_DIR / "grids"
 DEBUG_DIR   = OUT_DIR / "debug"
@@ -39,11 +38,18 @@ RESULTS_CSV = OUT_DIR / "results.csv"
 INSPECT_CSV = OUT_DIR / "inspection.csv"
 SAMPLE_TXT  = THIS_DIR / "sample_1911.txt"
 
-sys.path.insert(0, str(PROJECT_DIR))
-os.environ.setdefault(
-    "GOOGLE_APPLICATION_CREDENTIALS",
-    str(THIS_DIR / "smiling-breaker-423712-h3-aff7ac746ad4.json"),
-)
+# THIS_DIR is already the project package root; add it to path so
+# `from grid.scoring import ...` works when invoked via `python run_1911.py`
+sys.path.insert(0, str(THIS_DIR))
+
+# GCP credentials: prefer GOOGLE_APPLICATION_CREDENTIALS env var (set by .env).
+# Fall back to auto-discovering the single *.json in credentials/ (same logic as config.py).
+if not os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
+    _creds_dir = THIS_DIR.parent / "credentials"
+    if _creds_dir.is_dir():
+        _candidates = sorted(_creds_dir.glob("*.json"))
+        if len(_candidates) == 1:
+            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(_candidates[0])
 
 # -------------------------------------------------------------------
 # Grid detection (inline — same logic as project/grid/)

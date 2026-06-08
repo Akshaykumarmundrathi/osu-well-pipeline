@@ -335,7 +335,8 @@ def phase_pipeline(index_path: Path, workers: int):
          "--index",   str(index_path),
          "--output",  str(OUTPUT_ROOT),
          "--workers", str(workers),
-         "--resume"],
+         "--resume",
+         "--no-retry"],
         cwd=PROJECT_DIR,
     )
     elapsed = time.monotonic() - t0

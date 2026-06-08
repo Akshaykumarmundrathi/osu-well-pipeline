@@ -1629,9 +1629,10 @@ def run_pipeline(args):
         cur_year_key = (collection, year)
 
         if prev_year_key and cur_year_key != prev_year_key:
-            _retry_failed(year_group_records, stages, paths, status,
-                          total=len(records),
-                          label=f"{prev_year_key[0]} / {prev_year_key[1]}")
+            if getattr(args, "retry", True):
+                _retry_failed(year_group_records, stages, paths, status,
+                              total=len(records),
+                              label=f"{prev_year_key[0]} / {prev_year_key[1]}")
             year_group_records = []
 
         _before_month = _review_queue_count_by_stage(output_root)
@@ -1697,9 +1698,10 @@ def run_pipeline(args):
         _p(f"\n  Month complete: {month_done} done | {month_failed} failed | {month_skipped} skipped")
 
         status.force_save()
-        _retry_failed(month_recs, stages, paths, status,
-                      total=len(records),
-                      label=f"{collection} / {year} / {month}")
+        if getattr(args, "retry", True):
+            _retry_failed(month_recs, stages, paths, status,
+                          total=len(records),
+                          label=f"{collection} / {year} / {month}")
 
         _print_review_summary(output_root, _before_month,
                               f"{collection}/{year}/{month}")
@@ -1709,7 +1711,7 @@ def run_pipeline(args):
         prev_year_key = cur_year_key
 
     # Final year retry
-    if year_group_records:
+    if year_group_records and getattr(args, "retry", True):
         _retry_failed(year_group_records, stages, paths, status,
                       total=len(records),
                       label=f"{prev_year_key[0]} / {prev_year_key[1]}")
@@ -1823,6 +1825,8 @@ def main():
     ap.add_argument("--stage",     choices=list(ALL_STAGES))
     ap.add_argument("--resume",    action="store_true", default=True)
     ap.add_argument("--no-resume", dest="resume", action="store_false")
+    ap.add_argument("--no-retry",  dest="retry", action="store_false", default=True,
+                    help="Skip month/year retry passes (useful for test runs)")
     ap.add_argument("--limit",     type=int)
     ap.add_argument("--flat",      type=Path, help="Flat PDF folder (testing)")
     ap.add_argument("--pdf",       type=Path, help="Single PDF file")

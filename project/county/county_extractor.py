@@ -276,29 +276,50 @@ def _tokens_below_keyword(annotations, kw_box, max_tokens: int = 2,
     return " ".join(desc for _, desc in head)
 
 
-def _try_structural_anchor(annotations, kw_box, log) -> tuple[str, int]:
+def _try_structural_anchor(annotations, kw_box, log,
+                           county_format_hint: str | None = None) -> tuple[str, int]:
     """
-    Fuzzy-match tokens around the County keyword using three strategies:
+    Fuzzy-match tokens around the County keyword using three strategies.
 
-    1. **LEFT**  of keyword — handles "<name> County" (most common format;
-       name is written to the left of the printed word "County").
-    2. **RIGHT** of keyword — handles "County: <name>" (colon format used
-       in some Collection 9–11 printed forms).
-    3. **BELOW** keyword   — handles stacked / tabular format used in
-       Collection 11+ ("County" label on one line, "Garvin" on the next).
+    Strategy order is driven by ``county_format_hint`` from the form
+    classifier so the most likely format is tried first, reducing the
+    number of OCR token reads needed per record:
+
+    ``"name_county"``   → LEFT first  (most common on early forms: "Oklahoma County")
+    ``"county_colon"``  → RIGHT first (colon format: "County: Oklahoma")
+    ``"stacked"``       → BELOW first (Collection 11+ tabular: County / Garvin)
+    ``"any"`` / None    → LEFT → RIGHT → BELOW (default order)
+
+    After trying the priority strategy, the remaining two are tried in their
+    default order so nothing is missed if the hint is wrong.
 
     Returns the first strategy that produces a match at or above
-    FUZZY_MATCH_THRESHOLD.  If no strategy clears the threshold, returns
-    the best (name, score) pair found across all three so the caller can
-    use it as a weak fallback.
+    RETRY_CONFIDENCE_THRESHOLD (95).  If none clears that threshold, returns
+    the best (name, score) pair found across all three so the caller can use
+    it as a weak fallback at FUZZY_MATCH_THRESHOLD (72).
     """
+    from grid.form_classifier import COUNTY_NAME_THEN_WORD, COUNTY_COLON_AFTER, COUNTY_STACKED
+
+    # Build ordered strategy list driven by hint.
+    _all = [
+        ("left",  _tokens_left_of),
+        ("right", _tokens_right_of),
+        ("below", _tokens_below_keyword),
+    ]
+    if county_format_hint == COUNTY_STACKED:
+        ordered = [("below", _tokens_below_keyword),
+                   ("left",  _tokens_left_of),
+                   ("right", _tokens_right_of)]
+    elif county_format_hint == COUNTY_COLON_AFTER:
+        ordered = [("right", _tokens_right_of),
+                   ("left",  _tokens_left_of),
+                   ("below", _tokens_below_keyword)]
+    else:  # COUNTY_NAME_THEN_WORD, "any", or None → default left-first
+        ordered = _all
+
     best_name, best_score = "", 0
 
-    for strategy_fn, label in [
-        (_tokens_left_of,        "left"),
-        (_tokens_right_of,       "right"),
-        (_tokens_below_keyword,  "below"),
-    ]:
+    for label, strategy_fn in ordered:
         text = strategy_fn(annotations, kw_box)
         if not text:
             continue
@@ -324,6 +345,7 @@ def _try_page(
     log: logging.Logger,
     crop_scale: float = 1.0,
     full_page_gemini: bool = False,
+    county_format_hint: str | None = None,
 ) -> tuple[dict | None, bool]:
     """
     Attempt county extraction on a single page.
@@ -331,8 +353,11 @@ def _try_page(
     result_dict is None if the County keyword isn't on this page.
 
     Parameters:
-      crop_scale         multiplier on the keyword crop margins (retry uses >1)
-      full_page_gemini   if True, sends the WHOLE page to Gemini Pro (retry)
+      crop_scale          multiplier on the keyword crop margins (retry uses >1)
+      full_page_gemini    if True, sends the WHOLE page to Gemini Pro (retry)
+      county_format_hint  form-classifier hint; controls strategy priority in
+                          _try_structural_anchor() so the expected token layout
+                          (left / right / below) is tried first.
     """
     annotations, pil_image = get_page_annotations(
         manager=manager, page_num=page_num,
@@ -358,7 +383,8 @@ def _try_page(
         return None, False
 
     # -- Strategy 1: zero-cost structural anchor -----------------------------
-    name, score = _try_structural_anchor(annotations, kw_box, log)
+    name, score = _try_structural_anchor(annotations, kw_box, log,
+                                         county_format_hint=county_format_hint)
     if name and score >= RETRY_CONFIDENCE_THRESHOLD:
         log.info("County (anchor) = %r  score=%d", name, score)
         return {
@@ -485,6 +511,7 @@ def process_single_county(
     crop_scale: float = 1.0,
     full_page_gemini: bool = False,
     max_pages: int | None = None,
+    county_format_hint: str | None = None,
 ) -> dict:
     """
     Iterate the first `max_pages` (default: MAX_COUNTY_PAGES) until the
@@ -494,6 +521,9 @@ def process_single_county(
       crop_scale=COUNTY_RETRY_CROP_SCALE  (wider crop, helps OCR-quality issues)
       full_page_gemini=True               (skip crop, feed whole page to Pro)
       max_pages=<int>                     (override default 2-page limit)
+      county_format_hint=<str>            (COUNTY_* from form_classifier —
+                                           controls which token direction the
+                                           structural anchor tries first)
     """
     cap = max_pages if max_pages is not None else getattr(
         process_single_county, "_max_pages_override", MAX_COUNTY_PAGES,
@@ -507,6 +537,7 @@ def process_single_county(
         r, found_keyword = _try_page(
             manager, page_num, output_dir, pdf_stem, log,
             crop_scale=crop_scale, full_page_gemini=full_page_gemini,
+            county_format_hint=county_format_hint,
         )
         if found_keyword:
             return r

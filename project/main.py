@@ -833,22 +833,46 @@ def _process_record_worker(arg):
                 results[stage] = SKIPPED
                 continue
 
-        # Skip location for early/transition tiers — handwritten STR is unreadable
-        # by Tesseract (50-150s wasted per record, always returns not_found).
-        # Guard: only skip when collection_num is known (>0); unknown collections
-        # (ad-hoc --flat test runs) keep location enabled.
+        # Skip location for early/transition tiers — handwritten STR values
+        # are unreadable by Tesseract (50-150s wasted per record, always
+        # returns not_found) when the form structure is unknown.
+        #
+        # OVERRIDE: if the grid stage just detected a T1_LARGE, T2_MED, or
+        # T3_SMALL form type, those forms ALWAYS have PRINTED Section/Township/
+        # Range labels (only the VALUES may be handwritten).  Enable location
+        # anyway — the printed labels let the keyword grouper succeed, and
+        # the regex can often read typed/printed values even from early records.
+        #
+        # Guard: only skip when collection_num is known (>0); unknown
+        # collections (ad-hoc --flat test runs) keep location enabled.
         if stage == STAGE_LOCATION:
             _cnum_loc = getattr(record, "collection_num", None) or 0
             if _cnum_loc:
                 from config import TIER_CONFIG, tier_for as _tf_loc
+                from grid.form_classifier import (
+                    FORM_T1_LARGE, FORM_T2_MED, FORM_T3_SMALL,
+                )
                 _loc_tier = _tf_loc(_cnum_loc)
                 if not TIER_CONFIG.get(_loc_tier, {}).get("run_location", True):
-                    lines.append(
-                        f"  {label:<{_COL}}skipped  "
-                        f"(tier '{_loc_tier}' STR is handwritten, unreadable)"
-                    )
-                    results[stage] = SKIPPED
-                    continue
+                    # Check if form classifier identified a type with printed labels.
+                    _grid_r  = results.get(STAGE_GRID)
+                    _ftype   = isinstance(_grid_r, dict) and _grid_r.get("form_type")
+                    _printed = {FORM_T1_LARGE, FORM_T2_MED, FORM_T3_SMALL}
+                    if _ftype in _printed:
+                        pdf_log.info(
+                            "Early tier %r but form_type=%s has printed STR labels "
+                            "— enabling location stage",
+                            _loc_tier, _ftype,
+                        )
+                        # Let the stage run; fall through to dispatch.
+                    else:
+                        lines.append(
+                            f"  {label:<{_COL}}skipped  "
+                            f"(tier '{_loc_tier}' — STR likely handwritten, "
+                            f"no form-type hint to override)"
+                        )
+                        results[stage] = SKIPPED
+                        continue
 
         # Skip grid + location when lat/lon was already found (this run or prior).
         # Only apply the "prior run" branch when resume=True — with --no-resume the
@@ -1137,10 +1161,23 @@ def _dispatch(stage: str, manager: PDFDocumentManager,
         return process_single_grid(manager, out_dir, pdf_stem, log,
                                    skip_anchor=False)
 
-    # -- Extract form-type hints from grid result (may be None) ----------------
-    _gres = grid_result if isinstance(grid_result, dict) else {}
+    # -- Extract ALL form-type hints from grid result (may be None/empty) -----
+    _gres               = grid_result if isinstance(grid_result, dict) else {}
     _str_strategy_hint  = _gres.get("str_strategy_hint")
     _county_format_hint = _gres.get("county_format_hint")
+    _str_zone           = _gres.get("str_zone")
+    _grid_bbox          = _gres.get("bbox")   # list [x, y, w, h] or None
+
+    # If the grid stage was skipped/missing but the tier config has a default
+    # str_zone_by_grid_zone, use the first expected zone as a fallback hint.
+    if not _str_zone and record is not None:
+        from config import TIER_CONFIG, tier_for as _tf_hint
+        _tc = TIER_CONFIG.get(_tf_hint(record.collection_num), {})
+        _zone_map = _tc.get("str_zone_by_grid_zone", {})
+        if _zone_map:
+            _str_zone = next(iter(_zone_map.values()))  # first expected zone
+        if not _county_format_hint:
+            _county_format_hint = _tc.get("county_format")
 
     if stage == STAGE_LOCATION:
         from config import TIER_CONFIG, tier_for
@@ -1160,14 +1197,17 @@ def _dispatch(stage: str, manager: PDFDocumentManager,
             if result.get("detected"):
                 return result
 
-            # Fallback: classic SEC/TWP/RGE keyword extractor, with the form-
-            # type hint so it tries vertical-stack extraction first when the
-            # grid was classified as LATE (Collection 11+, top-right zone).
+            # Fallback: classic SEC/TWP/RGE keyword extractor.
+            # Pass ALL form-type hints:
+            #   str_strategy_hint → try vertical stack first for LATE forms
+            #   str_zone + grid_bbox → restrict search to expected page region
             log.debug("location_keyword strategy not detected — falling back to str_keywords")
             from location.location_extractor import process_single_location
             fallback = process_single_location(
                 manager, out_dir, pdf_stem, log,
                 str_strategy_hint=_str_strategy_hint,
+                str_zone=_str_zone,
+                grid_bbox=_grid_bbox,
             )
             if fallback.get("detected"):
                 fallback["strategy_used"] = "str_keywords_fallback"
@@ -1180,14 +1220,19 @@ def _dispatch(stage: str, manager: PDFDocumentManager,
         return process_single_location(
             manager, out_dir, pdf_stem, log,
             str_strategy_hint=_str_strategy_hint,
+            str_zone=_str_zone,
+            grid_bbox=_grid_bbox,
         )
 
     if stage == STAGE_COUNTY:
         from county.county_extractor import process_single_county
-        # county_format_hint is stored in the grid result but the extractor
-        # currently tries all three strategies automatically; the hint is
-        # forwarded for logging / future prioritisation (not a hard constraint).
-        return process_single_county(manager, out_dir, pdf_stem, log)
+        # county_format_hint controls which token direction the structural
+        # anchor tries first: left (name_county) / right (county_colon) /
+        # below (stacked).  Falls back gracefully if the hint is wrong.
+        return process_single_county(
+            manager, out_dir, pdf_stem, log,
+            county_format_hint=_county_format_hint,
+        )
 
     if stage == STAGE_DOT:
         from dot.dot_extractor import process_single_dot

@@ -37,6 +37,15 @@ from config import (
     ILLEGIBLE_WORD_THRESHOLD,
     LOCATION_KEYWORDS, LOCATION_MIN_OVERLAP, LOCATION_MIN_OVERLAP_RETRY,
 )
+from grid.form_classifier import (
+    STR_TOP_HEADER,
+    STR_RIGHT_OF_GRID,
+    STR_LEFT_OF_GRID,
+    STR_UPPER_RIGHT,
+    STR_VERTICAL_RIGHT,
+    STR_VERTICAL_LEFT,
+    STR_ANY,
+)
 from location.grouping import (
     choose_group,
     find_keywords_lists,
@@ -46,6 +55,108 @@ from ocr.quadrant_extractor import extract_quadrant
 from ocr.vision_api import detect_text_with_vision
 from pdf.pdf_manager import PDFDocumentManager
 from utils.io_utils import annotate_page
+
+
+# -- STR zone region filter ----------------------------------------------------
+
+def _region_for_zone(
+    str_zone: str | None,
+    page_w: int,
+    page_h: int,
+    grid_bbox=None,   # (x, y, w, h) full-page pixels, or None
+) -> tuple[int, int, int, int] | None:
+    """
+    Convert a ``str_zone`` hint from the form classifier into a
+    ``(x0, y0, x1, y1)`` search region.
+
+    When zone is None or 'any' the whole page is returned (None),
+    meaning no filtering is applied.
+
+    Grid-relative zones (right_of_grid / left_of_grid) require
+    ``grid_bbox``; if it is None they fall back to page halves.
+
+    Zones
+    ─────
+    top_header     → top 40 % of page, full width
+                     (T1_LARGE: STR in letterhead above the grid)
+    right_of_grid  → same vertical band as grid, right 55 % of page
+                     (T2_MED / T3_SMALL: labels to the right of grid)
+    left_of_grid   → same vertical band as grid, left 45 % of page
+                     (MID / LATE: STR block to the left)
+    upper_right    → upper-right quadrant (y < 40 %, x > 35 %)
+                     (T3_SMALL / T4_NOANCHOR: small upper-right block)
+    vertical_right → right 50 % of page (stacked layout, right side)
+    vertical_left  → left 50 % of page  (stacked layout, left side)
+    any / None     → None (full page)
+    """
+    if not str_zone or str_zone == STR_ANY:
+        return None
+
+    # Generous padding so we never clip a label that slightly overruns a boundary.
+    _PAD = 40
+
+    if str_zone == STR_TOP_HEADER:
+        return (0, 0, page_w, int(page_h * 0.42))
+
+    if str_zone == STR_UPPER_RIGHT:
+        return (int(page_w * 0.33), 0, page_w, int(page_h * 0.42))
+
+    if str_zone in (STR_VERTICAL_RIGHT, STR_VERTICAL_LEFT):
+        if str_zone == STR_VERTICAL_RIGHT:
+            return (int(page_w * 0.45), 0, page_w, page_h)
+        return (0, 0, int(page_w * 0.55), page_h)
+
+    # Grid-relative zones — prefer grid_bbox if available.
+    if grid_bbox is not None:
+        try:
+            gx, gy, gw, gh = int(grid_bbox[0]), int(grid_bbox[1]), \
+                              int(grid_bbox[2]), int(grid_bbox[3])
+            # Vertical band: from well above grid top to well below grid bottom.
+            vy0 = max(0,      gy - gh - _PAD)
+            vy1 = min(page_h, gy + gh + _PAD)
+        except (TypeError, ValueError, IndexError):
+            gx = gw = 0
+            vy0, vy1 = 0, page_h
+    else:
+        gx = gw = 0
+        vy0, vy1 = 0, page_h
+
+    if str_zone == STR_RIGHT_OF_GRID:
+        x0 = max(0, gx + gw - _PAD) if gw else int(page_w * 0.40)
+        return (x0, vy0, page_w, vy1)
+
+    if str_zone == STR_LEFT_OF_GRID:
+        x1 = min(page_w, gx + _PAD) if gx else int(page_w * 0.55)
+        return (0, vy0, x1, vy1)
+
+    return None  # unknown zone — no filter
+
+
+def _filter_annotations_to_region(annotations, region):
+    """
+    Return a new annotation list (preserving index-0 full-text blob) where
+    every token annotation has its bounding-box centre inside ``region``.
+
+    ``region`` is (x0, y0, x1, y1) or None (pass-through).
+    """
+    if region is None or not annotations:
+        return annotations
+    x0, y0, x1, y1 = region
+    filtered = [annotations[0]]   # keep full-text blob at index 0
+    for ann in annotations[1:]:
+        poly = ann.bounding_poly
+        if not poly or not poly.vertices:
+            continue
+        try:
+            xs = [v.x for v in poly.vertices]
+            ys = [v.y for v in poly.vertices]
+            cx = sum(xs) / len(xs)
+            cy = sum(ys) / len(ys)
+            if x0 <= cx <= x1 and y0 <= cy <= y1:
+                filtered.append(ann)
+        except Exception:
+            continue
+    return filtered
 
 
 # -- Regex helpers -------------------------------------------------------------
@@ -381,6 +492,8 @@ def process_single_location(
     section_right_extension: int = 200,
     min_overlap: float | None = None,
     str_strategy_hint: str | None = None,
+    str_zone: str | None = None,
+    grid_bbox=None,
 ) -> dict:
     """
     Scan pages for section/township/range. Strategy order:
@@ -391,12 +504,26 @@ def process_single_location(
     4. Vertical label-over-value extraction — for Collection 11+ "LATE" layout
        where field labels and values appear as column header / value rows.
 
-    ``str_strategy_hint`` from the form classifier controls execution order:
-    - ``"vertical_stack"`` → Strategy 4 runs FIRST (before strategies 1-3).
-    - Any other value     → strategies 1→2→3 in the usual order, then 4 last.
+    Form-type hints (from the grid classifier, set by main._dispatch):
+    ─────────────────────────────────────────────────────────────────
+    ``str_zone``          – page region where STR is expected (STR_* constant
+                           from grid/form_classifier.py).  When supplied,
+                           token annotations are PRE-FILTERED to this region
+                           before any strategy runs.  This prevents a keyword
+                           like "SEC" from matching an unrelated label elsewhere
+                           on the page and dramatically reduces false-positives
+                           for records with complex multi-section layouts.
 
-    ``min_overlap`` overrides the strict default (config.LOCATION_MIN_OVERLAP).
-    Retry path passes the loose value for a second chance.
+    ``grid_bbox``         – (x, y, w, h) in full-page pixels of the detected
+                           grid.  Used to compute exact grid-relative zones
+                           (STR_RIGHT_OF_GRID, STR_LEFT_OF_GRID).
+
+    ``str_strategy_hint`` – when "vertical_stack", Strategy 4 runs FIRST
+                           (Collection 11+ tabular header layout); otherwise
+                           Strategy 4 is the last fallback.
+
+    ``min_overlap``       – overrides the strict default (config.LOCATION_MIN_OVERLAP).
+                           Retry path passes the loose value for a second chance.
     """
     log = logger or logging.getLogger(__name__)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -413,6 +540,12 @@ def process_single_location(
         "quadrant_row": "", "quadrant_col": "",
         "quadrant_confidence": 0,
     }
+
+    # Compute the search region once (same across all pages).
+    # _region_for_zone returns None for STR_ANY / unknown zones, which means
+    # _filter_annotations_to_region passes all annotations through unchanged.
+    pw0 = ph0 = 1  # placeholder; updated inside the page loop before use
+    _zone_region_cache: list = [None]  # mutable container so inner scope can update
 
     try:
         for page_num, pil_image in manager.iter_pil_pages():
@@ -432,8 +565,25 @@ def process_single_location(
                           page_num, word_count)
                 continue
 
+            pw, ph = pil_image.size
+            # Compute the zone-filter region (only once; page size is constant).
+            if pw != pw0 or ph != ph0:
+                pw0, ph0 = pw, ph
+                zone_region = _region_for_zone(str_zone, pw, ph, grid_bbox)
+                _zone_region_cache[0] = zone_region
+                if zone_region:
+                    log.debug(
+                        "STR zone filter active: zone=%s region=%s",
+                        str_zone, zone_region,
+                    )
+            else:
+                zone_region = _zone_region_cache[0]
+
+            # Apply zone filter — reduces false keyword matches on complex pages.
+            ann_for_grouping = _filter_annotations_to_region(annotations, zone_region)
+
             sections, townships, ranges = find_keywords_lists(
-                annotations, LOCATION_KEYWORDS, extend_right, padding_height,
+                ann_for_grouping, LOCATION_KEYWORDS, extend_right, padding_height,
             )
 
             sec = twp = rng = ""
@@ -447,7 +597,7 @@ def process_single_location(
             # horizontal grouping strategies.  This prevents the grouping from
             # wasting time on a layout it cannot handle.
             if prefer_vertical:
-                v_sec, v_twp, v_rng = _extract_str_vertical(annotations)
+                v_sec, v_twp, v_rng = _extract_str_vertical(ann_for_grouping)
                 if sum(bool(v) for v in (v_sec, v_twp, v_rng)) >= 2:
                     sec, twp, rng = v_sec, v_twp, v_rng
                     raw_text = f"vertical: sec={sec} twp={twp} rng={rng}"
@@ -528,7 +678,7 @@ def process_single_location(
             # For non-LATE form types, try vertical extraction as a last resort
             # after all horizontal strategies have failed.
             if found < 2 and not prefer_vertical:
-                v_sec, v_twp, v_rng = _extract_str_vertical(annotations)
+                v_sec, v_twp, v_rng = _extract_str_vertical(ann_for_grouping)
                 sec = sec or v_sec
                 twp = twp or v_twp
                 rng = rng or v_rng

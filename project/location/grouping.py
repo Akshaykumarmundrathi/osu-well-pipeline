@@ -1,38 +1,100 @@
-def find_keywords_lists(text_annotations, keywords, extend_right=400, padding_height=50):
+"""
+Keyword-based SEC/TWP/RGE grouping for location extraction.
+
+find_keywords_lists()
+    Scan OCR token annotations for section / township / range label tokens.
+    Returns three bbox lists, one per field type.
+
+choose_group()
+    From those three lists, pick the best aligned triplet (horizontal layout
+    assumption: SEC to the left of TWP to the left of RGE on the same line).
+
+get_unified_bounding_box()
+    Merge the triplet into one crop-box that encompasses all three labels plus
+    a right extension large enough to capture the printed value.
+
+Token-matching strategy
+───────────────────────
+Each OCR annotation is a *single token*.  The matching test uses **exact
+comparison** after stripping trailing punctuation (period, comma, colon,
+semicolon) from both the token and the keyword variant.  This prevents
+substring false-positives such as:
+
+  "secondary"  matching keyword "sec"
+  "arrangement" matching keyword "range"
+  "township15"  matching keyword "twp" (combined OCR artefact)
+
+Uppercase is normalised to lower-case before comparison.
+
+The keyword lists in config.LOCATION_KEYWORDS must therefore be exhaustive:
+every observed abbreviation variant is listed explicitly there.  Bare single-
+letter variants "T" and "R" (Variant-D dash-separated forms on early records)
+are NOT in the keyword list because a single-character exact match would
+produce massive false-positives; they are handled instead by the _TWP_RE /
+_RNG_RE regex in location/location_extractor.py.
+"""
+
+import re as _re
+
+# Strip trailing punctuation for token normalisation.
+_PUNCT_RE = _re.compile(r"[.\s,;:\-]+$")
+
+
+def _normalise_token(tok: str) -> str:
+    """Lower-case + strip trailing punctuation."""
+    return _PUNCT_RE.sub("", tok.lower())
+
+
+def find_keywords_lists(text_annotations, keywords,
+                        extend_right=400, padding_height=50):
     """
-    Loops over text annotations (skipping the first full-text annotation) and collects
-    bounding boxes (with vertical padding and right extension) for each keyword variation.
-    Returns three lists: one for "section", one for "township", and one for "range".
+    Scan OCR token annotations (skipping the first full-page blob at index 0)
+    and collect bounding boxes for each keyword match.
+
+    Returns three lists: ``(sections, townships, ranges)``.
+
+    Each box is ``[x_min, y_min, x_max + extend_right, y_max]`` with
+    ``y_min / y_max`` padded by ``padding_height`` so that a value token
+    sitting one line above or below the keyword still overlaps the box.
+
+    Matching is **exact** (after punctuation-stripping + lower-case) to avoid
+    the substring false-positives documented in the module header.
     """
+    # Pre-normalise all keyword variants once.
+    sec_variants  = [_normalise_token(v) for v in keywords["section"]]
+    twp_variants  = [_normalise_token(v) for v in keywords["township"]]
+    rng_variants  = [_normalise_token(v) for v in keywords["range"]]
+
     sections  = []
     townships = []
     ranges    = []
 
     for annotation in text_annotations[1:]:
-        text = annotation.description.lower()
-        poly = annotation.bounding_poly
+        raw_text = annotation.description or ""
+        tok = _normalise_token(raw_text)
+        if not tok:
+            continue
 
-        x_min = min(vertex.x for vertex in poly.vertices)
-        y_min = min(vertex.y for vertex in poly.vertices) - padding_height
-        x_max = max(vertex.x for vertex in poly.vertices)
-        y_max = max(vertex.y for vertex in poly.vertices) + padding_height
+        poly = annotation.bounding_poly
+        if not poly or not poly.vertices:
+            continue
+
+        try:
+            x_min = min(v.x for v in poly.vertices)
+            y_min = min(v.y for v in poly.vertices) - padding_height
+            x_max = max(v.x for v in poly.vertices)
+            y_max = max(v.y for v in poly.vertices) + padding_height
+        except Exception:
+            continue
 
         bbox = [x_min, y_min, x_max + extend_right, y_max]
 
-        for var in keywords["section"]:
-            if var in text:
-                sections.append(bbox)
-                break
-
-        for var in keywords["township"]:
-            if var in text:
-                townships.append(bbox)
-                break
-
-        for var in keywords["range"]:
-            if var in text:
-                ranges.append(bbox)
-                break
+        if tok in sec_variants:
+            sections.append(bbox)
+        elif tok in twp_variants:
+            townships.append(bbox)
+        elif tok in rng_variants:
+            ranges.append(bbox)
 
     return sections, townships, ranges
 
@@ -40,7 +102,7 @@ def find_keywords_lists(text_annotations, keywords, extend_right=400, padding_he
 def vertical_overlap(y1_min, y1_max, y2_min, y2_max):
     """
     Fractional vertical overlap between two y-ranges, normalised by the
-    smaller height. Returns 0..1 (0 if disjoint, 1 if one contains the other).
+    smaller height.  Returns 0..1 (0 if disjoint, 1 if one contains the other).
     """
     overlap = max(0, min(y1_max, y2_max) - max(y1_min, y2_min))
     height1 = y1_max - y1_min
@@ -50,14 +112,15 @@ def vertical_overlap(y1_min, y1_max, y2_min, y2_max):
 
 def choose_group(sections, townships, ranges, min_overlap=0.5):
     """
-    Attempts to choose a group where a candidate "section" has at least one candidate
-    "township" and one candidate "range" that begin to the right of the section
-    and have sufficient vertical overlap.
+    Attempt to choose a horizontal triplet where:
+      • township starts to the RIGHT of section  (t_x_min > s_x_max)
+      • range starts to the RIGHT of section
+      • all three boxes share sufficient vertical overlap (≥ min_overlap)
 
-    Returns a dictionary with keys: "section", "township", and "range".
+    If no section-anchored triplet is found but township AND range boxes exist,
+    return a fallback unified box so at least TWP + RGE can anchor the crop.
 
-    If no valid group is found based solely on "section", then if townships and ranges exist,
-    returns a fallback group with a unified bounding box.
+    Returns a dict or None.
     """
     for s in sections:
         s_x_min, s_y_min, s_x_max, s_y_max = s
@@ -68,7 +131,8 @@ def choose_group(sections, townships, ranges, min_overlap=0.5):
             t_x_min, t_y_min, t_x_max, t_y_max = t
             if (
                 t_x_min > s_x_max
-                and vertical_overlap(s_y_min, s_y_max, t_y_min, t_y_max) >= min_overlap
+                and vertical_overlap(s_y_min, s_y_max,
+                                     t_y_min, t_y_max) >= min_overlap
             ):
                 candidate_t = t
                 break
@@ -77,16 +141,21 @@ def choose_group(sections, townships, ranges, min_overlap=0.5):
             r_x_min, r_y_min, r_x_max, r_y_max = r
             if (
                 r_x_min > s_x_max
-                and vertical_overlap(s_y_min, s_y_max, r_y_min, r_y_max) >= min_overlap
+                and vertical_overlap(s_y_min, s_y_max,
+                                     r_y_min, r_y_max) >= min_overlap
             ):
                 candidate_r = r
                 break
 
         if candidate_t and candidate_r:
-            return {"section": s, "township": candidate_t, "range": candidate_r}
+            return {
+                "section":  s,
+                "township": candidate_t,
+                "range":    candidate_r,
+            }
 
-    # Fallback: if no grouped section found but townships and ranges exist,
-    # use the union of all township and range boxes and adjust boundaries.
+    # Fallback: if no section found but township + range exist,
+    # return a unified box so the crop can still be extracted.
     if townships and ranges:
         union_boxes = townships + ranges
         union_x_min = min(box[0] for box in union_boxes)
@@ -105,14 +174,19 @@ def choose_group(sections, townships, ranges, min_overlap=0.5):
                 union_y_max + 80,
             ],
         }
+
     return None
 
 
 def get_unified_bounding_box(group, section_right_extension=200):
     """
-    Returns a unified bounding box from a group dictionary.
-    If a "section" candidate exists, use its box and extend its right edge further.
-    Otherwise, return the fallback unified box.
+    Return a unified bounding box from a group dictionary.
+
+    When a ``section`` candidate is present, the section bbox is used as
+    the left anchor and extended right by ``section_right_extension`` pixels
+    to capture the associated value.
+
+    Otherwise the pre-computed ``unified`` fallback box is returned.
     """
     if group is None:
         return None
@@ -121,7 +195,7 @@ def get_unified_bounding_box(group, section_right_extension=200):
         s = group["section"]
         return [s[0], s[1], s[2] + section_right_extension, s[3]]
 
-    elif "unified" in group:
+    if "unified" in group:
         return group["unified"]
 
     return None

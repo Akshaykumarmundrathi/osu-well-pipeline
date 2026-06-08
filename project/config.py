@@ -81,10 +81,30 @@ GRID_ROWS, GRID_COLS = 8, 8
 STD_GRID_SIZE        = 512
 
 # -- Keywords ------------------------------------------------------------------
+# SEC/TWP/RGE keyword variants observed across all 13 collections.
+# These are matched against individual OCR *tokens* (exact after stripping
+# punctuation — see location/grouping.py), so every observed abbreviation
+# must be listed explicitly.  The bare single-letter variants "T" / "R"
+# (Variant D dash-separated forms) are intentionally excluded here because
+# they are too short for safe token matching; they are handled instead by
+# the _TWP_RE / _RNG_RE regex in location/location_extractor.py.
 LOCATION_KEYWORDS = {
-    "section":  ["section", "sec", "sec."],
-    "township": ["township", "twn", "tvp", "twp"],
-    "range":    ["range", "rge"],
+    # Section keyword variants (A-E across all collections):
+    #   A) "Section" full word (Collections 1-6, printed)
+    #   B) "SEC"/"sec" abbreviated (Collections 1-13)
+    #   C) "Sec." / "sec." period-terminated (Transition/Mid)
+    #   D-E) "Sect" (Collection 9 form variant, also Coll 9 Location: line)
+    "section":  ["section", "sec", "sec.", "sect", "sect."],
+    # Township keyword variants:
+    #   A) "Township" full word (Collections 1-6)
+    #   B) "TWP"/"twp"/"twp." (Collections 1-13)
+    #   C) "Twn"/"tvp" — older abbreviations (Collections 1-4)
+    "township": ["township", "twn", "tvp", "twp", "twp."],
+    # Range keyword variants:
+    #   A) "Range" full word (Collections 1-6)
+    #   B) "RGE"/"rge"/"rge." abbreviated (Collections 1-13)
+    #   C) "Rge" mixed-case period (Transition/Mid)
+    "range":    ["range", "rge", "rge."],
 }
 
 COUNTY_KEYWORDS = [
@@ -248,6 +268,22 @@ TIER_GRID_ZONES = {
     TIER_MODERN:     ["top-left", "top-center", "top-right"],  # insufficient data — allow all
 }
 
+# Per-tier grid aspect-ratio (width/height) expected range.
+# Calibrated from Jun 2025 manual inspection of ~700 PDFs:
+#   EARLY T1/T2 landscape  — AR ≈ 1.21–1.30 (wider than tall)
+#   TRANSITION T3 portrait — AR ≈ 0.58–0.63 (taller than wide)
+#   MID portrait           — AR ≈ 0.50–0.60
+#   LATE medium portrait   — AR ≈ 0.60–0.80
+# Used by process_single_grid() to prefer / reject candidates within the
+# already-broad GRID_W/H_STRICT band.
+TIER_GRID_AR = {
+    TIER_EARLY:      (0.80, 1.60),   # landscape grids dominate (T1/T2)
+    TIER_TRANSITION: (0.50, 0.80),   # portrait T3 small grids
+    TIER_MID:        (0.45, 0.75),   # portrait mid-era
+    TIER_LATE:       (0.55, 0.90),   # medium portrait late-era
+    TIER_MODERN:     (0.45, 1.60),   # insufficient data — allow all
+}
+
 
 def tier_for(collection_num: int | None) -> str:
     """
@@ -279,25 +315,128 @@ def decade_for(year: str | int | None) -> str:
 # Per-tier flags. Add knobs here as the pipeline grows; consumers should
 # look up via tier_for() then index this dict.
 TIER_CONFIG = {
-    # run_latlong:   attempt lat/lon extraction (Vision OCR on page 1).
-    #                False for tiers where <2% of forms carry coordinates — not
-    #                worth the extra API call per record.
-    # run_location:  attempt SEC/TWP/RGE extraction via OCR keywords.
-    #                False for very early tiers where values are handwritten and
-    #                OCR quality is too low to be reliable.
-    # location_strategy: 'str_keywords'      → look for SEC/TWP/RGE labels
-    #                    'location_keyword'  → look for 'Location:' line
+    # ── Per-tier structural profile ────────────────────────────────────────
+    # Derived from Jun 2025 manual inspection of ~700 PDFs across all 13
+    # collections.  Each tier captures a distinct form-layout generation.
     #
-    # Jun 2025 calibration from ~700 manually inspected samples:
-    #   EARLY:      no lat/lon; SEC/TWP/RGE handwritten → run_location=False
-    #   TRANSITION: <2% lat/lon (Coll 8); SEC/TWP/RGE printed → run_location=True
-    #   MID:        10-18% lat/lon (Coll 9-10); Location: line dominant
-    #   LATE+:      >85% lat/lon; Location: line + coordinates
-    TIER_EARLY:      {"run_latlong": False, "run_location": False, "location_strategy": "str_keywords"},
-    TIER_TRANSITION: {"run_latlong": False, "run_location": True,  "location_strategy": "str_keywords"},
-    TIER_MID:        {"run_latlong": True,  "run_location": True,  "location_strategy": "location_keyword"},
-    TIER_LATE:       {"run_latlong": True,  "run_location": True,  "location_strategy": "location_keyword"},
-    TIER_MODERN:     {"run_latlong": True,  "run_location": True,  "location_strategy": "location_keyword"},
+    # run_latlong          : attempt decimal lat/lon extraction on page 1.
+    # run_location         : attempt SEC/TWP/RGE label extraction.
+    #                        Early default is False because handwritten values
+    #                        are unreadable — but see override logic in main.py:
+    #                        when the grid stage detects a T1/T2/T3 form type
+    #                        (which always has PRINTED STR labels), run_location
+    #                        is enabled regardless of this flag.
+    # location_strategy    : 'str_keywords'     → look for SEC/TWP/RGE label tokens
+    #                        'location_keyword' → look for 'Location:' single line
+    # county_format        : predominant county name format for this tier
+    #                        'name_county'   → "<name> County"  (left of keyword)
+    #                        'county_colon'  → "County: <name>" (right of keyword)
+    #                        'stacked'       → label on one line, name directly below
+    #                        'any'           → all three tried in default order
+    # str_label_variant    : dominant STR label style (informational; used in logs)
+    # typical_page_count   : most common page count for PDFs in this tier
+    # str_zone_by_grid_zone: expected STR block position given the grid zone;
+    #                        used by location extractor to restrict search region.
+    #                        Keys are ZONE_* strings from grid/form_classifier.py.
+    #
+    TIER_EARLY: {
+        # Collections 1–6 (~1911–1970)
+        # ─────────────────────────────────────────────────────────────────
+        # T1_LARGE (Colls 1-3, bottom-left grid): SEC/TWP/RGE labels are
+        #   printed in the letterhead ABOVE the grid.  Values are often
+        #   handwritten but the labels are always machine-printed.
+        # T2_MED   (Colls 1-4, top-left grid):    Same labels, upper-right block.
+        # T3_SMALL (Colls 4-6, top-left portrait): Small printed labels.
+        # → run_location is False by DEFAULT but overridden per-record in
+        #   main.py when form_type ∈ {T1_LARGE, T2_MED, T3_SMALL} (i.e. the
+        #   grid was found and it's a known form type with printed labels).
+        "run_latlong":        False,
+        "run_location":       False,    # overridden when grid+form_type known
+        "location_strategy":  "str_keywords",
+        "county_format":      "name_county",   # almost universal: "Oklahoma County"
+        "str_label_variant":  "full_word",     # "Section / Township / Range"
+        "typical_page_count": 1,
+        "str_zone_by_grid_zone": {
+            "bottom_left": "top_header",     # T1_LARGE: STR above the grid
+            "top_left":    "right_of_grid",  # T2_MED / T3_SMALL: STR to right
+            "top_center":  "right_of_grid",
+        },
+    },
+
+    TIER_TRANSITION: {
+        # Collections 7–8 (~1971–1982)
+        # ─────────────────────────────────────────────────────────────────
+        # Uniformly top-left, portrait T3_SMALL grids (AR ≈ 0.58-0.63).
+        # STR labels abbreviated: "SEC / TWP / RGE".
+        # County: mix of "name County" and early "County: name".
+        "run_latlong":        False,
+        "run_location":       True,
+        "location_strategy":  "str_keywords",
+        "county_format":      "any",
+        "str_label_variant":  "abbreviated",   # "SEC / TWP / RGE"
+        "typical_page_count": 1,
+        "str_zone_by_grid_zone": {
+            "top_left":   "upper_right",
+            "top_center": "upper_right",
+        },
+    },
+
+    TIER_MID: {
+        # Collections 9–10 (~1983–2000)
+        # ─────────────────────────────────────────────────────────────────
+        # Coll 9: top-left, small portrait.  Anchor "Locate Well And Dotline".
+        #   "Sect 14, T-18N, R-13E, Tulsa County" → location_keyword.
+        # Coll 10 (~1990): top-center, "LOCATE WELL" anchor.
+        #   STR labels to the LEFT of the grid.
+        # Both sub-collections have ~10-18% lat/lon records.
+        "run_latlong":        True,
+        "run_location":       True,
+        "location_strategy":  "location_keyword",
+        "county_format":      "any",
+        "str_label_variant":  "abbreviated_dash",  # "Sect 14, T-18N, R-13E"
+        "typical_page_count": 2,
+        "str_zone_by_grid_zone": {
+            "top_left":   "upper_right",
+            "top_center": "left_of_grid",
+        },
+    },
+
+    TIER_LATE: {
+        # Collections 11–12 (~2001–2018)
+        # ─────────────────────────────────────────────────────────────────
+        # Grid shifts to top-right (~17%) or top-center (~80%).
+        # County + SEC/TWP/RGE labels appear to the LEFT of the grid in a
+        # VERTICAL STACKED layout:
+        #   County    SEC    TWP    RGE
+        #   Garvin    15     23N    10W
+        # → county_format='stacked'; str_strategy_hint='vertical_stack'.
+        # Lat/lon dominant (>85% of records).
+        "run_latlong":        True,
+        "run_location":       True,
+        "location_strategy":  "location_keyword",
+        "county_format":      "stacked",
+        "str_label_variant":  "vertical_stack",  # tabular header/value rows
+        "typical_page_count": 2,
+        "str_zone_by_grid_zone": {
+            "top_center": "left_of_grid",
+            "top_right":  "left_of_grid",
+            "top_left":   "upper_right",
+        },
+    },
+
+    TIER_MODERN: {
+        # Collections 13+ (~2019–2024)
+        # ─────────────────────────────────────────────────────────────────
+        # Digital / fillable-PDF forms.  Lat/lon always present.
+        # Layout data insufficient — allow all strategies.
+        "run_latlong":        True,
+        "run_location":       True,
+        "location_strategy":  "location_keyword",
+        "county_format":      "any",
+        "str_label_variant":  "any",
+        "typical_page_count": 2,
+        "str_zone_by_grid_zone": {},
+    },
 }
 
 # Keywords used by the new 'Location:' extractor in mid/late/modern tiers.

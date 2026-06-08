@@ -39,8 +39,9 @@ RUN pip install --no-cache-dir \
 COPY project/   ./project/
 COPY aws/       ./aws/
 
-# U-Net model weights (5.7 MB — trained dot detector)
+# U-Net model weights + detector module
 COPY unet_best.pth .
+COPY unet_dot_detector.py .
 
 # ── Runtime config ───────────────────────────────────────────────────────────
 ENV PYTHONPATH=/app/project \

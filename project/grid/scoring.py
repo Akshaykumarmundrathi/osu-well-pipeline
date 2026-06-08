@@ -169,8 +169,10 @@ def _try_anchor_on_page(manager, page_num_1indexed, cv_img,
     """
     Try the structural-anchor strategy on a single page.
 
-    Returns (grid_img, full_page_bbox, method_label) or (None, None, None).
-    `method_label` is prefixed with 'anchor_<position>_' so the summary
+    Returns (grid_img, full_page_bbox, method_label, anchor_phrase) or
+    (None, None, None, None).  ``anchor_phrase`` is the matched text
+    (e.g. 'Spot Well Correctly') forwarded to classify_form_type().
+    ``method_label`` is prefixed with 'anchor_<position>_' so the summary
     CSV can tell anchor hits apart from full-page CV hits.
     """
     try:
@@ -179,9 +181,9 @@ def _try_anchor_on_page(manager, page_num_1indexed, cv_img,
         )
     except Exception as exc:
         log.debug("Anchor OCR failed page %d: %s", page_num_1indexed, exc)
-        return None, None, None
+        return None, None, None, None
     if not annotations:
-        return None, None, None
+        return None, None, None, None
 
     anchor_bbox, pos, phrase = find_grid_anchor(annotations)
     if anchor_bbox is None:

@@ -813,7 +813,20 @@ def _process_record_worker(arg):
         prior_status = prior_row.get(f"{stage}_status")
         if resume and prior_status == DONE:
             lines.append(f"  {label:<{_COL}}already done")
-            results[stage] = {"detected": True, "_was_done": True}
+            _done_result = {"detected": True, "_was_done": True}
+            # For the grid stage, reconstruct form-type classifier hints from
+            # the saved CSV row so that downstream location + county dispatching
+            # still gets the correct search-region hints on resume.
+            if stage == STAGE_GRID:
+                _done_result.update({
+                    "form_type":          prior_row.get("grid_form_type", ""),
+                    "str_zone":           prior_row.get("grid_str_zone", ""),
+                    "county_format_hint": prior_row.get("grid_county_format_hint", ""),
+                    "str_strategy_hint":  prior_row.get("grid_str_strategy_hint", ""),
+                    "bbox":               None,  # pixel coords not persisted; zone hint still works
+                    "anchor_phrase":      prior_row.get("grid_anchor_phrase", ""),
+                })
+            results[stage] = _done_result
             continue
         if resume and prior_status == SKIPPED:
             lines.append(f"  {label:<{_COL}}already skipped")
@@ -1255,10 +1268,15 @@ _RETRIED: set[str] = set()           # stems already retried this run
 
 
 def _retry_one_stage(stage: str, error_type: str, manager, out_dir: Path,
-                     pdf_stem: str, pdf_log, skip_anchor: bool = False):
+                     pdf_stem: str, pdf_log, skip_anchor: bool = False,
+                     grid_result: dict | None = None):
     """
     Re-run a single failed stage with a strategy chosen from `error_type`.
     Returns the new result dict (or None when no strategy applies).
+
+    ``grid_result``: form-type hints reconstructed from the saved CSV row by
+    ``_retry_record()``.  Forwarded to location and county extractors so they
+    still use the correct search-region hints even on the retry path.
 
     Strategies:
       county / keyword_not_found  -> scan deeper pages
@@ -1273,32 +1291,46 @@ def _retry_one_stage(stage: str, error_type: str, manager, out_dir: Path,
         MAX_COUNTY_PAGES_RETRY, MAX_LATLONG_PAGES_RETRY,
     )
 
+    # Extract form-type hints (may be empty strings if grid was never found)
+    _gres               = grid_result if isinstance(grid_result, dict) else {}
+    _str_strategy_hint  = _gres.get("str_strategy_hint") or None
+    _county_format_hint = _gres.get("county_format_hint") or None
+    _str_zone           = _gres.get("str_zone") or None
+    _grid_bbox          = _gres.get("bbox")   # None on resume (pixel coords not saved)
+
     if stage == STAGE_COUNTY:
         from county.county_extractor import process_single_county
         if error_type == "keyword_not_found":
             return process_single_county(
                 manager, out_dir, pdf_stem, pdf_log,
                 max_pages=MAX_COUNTY_PAGES_RETRY,
+                county_format_hint=_county_format_hint,
             )
         if error_type in ("no_match", "invalid_crop", "exception", "unknown", ""):
             # Try wider crop first; if still no_match, go to full-page Pro.
             r = process_single_county(
                 manager, out_dir, pdf_stem, pdf_log,
                 crop_scale=COUNTY_RETRY_CROP_SCALE,
+                county_format_hint=_county_format_hint,
             )
             if r.get("detected"):
                 return r
             return process_single_county(
                 manager, out_dir, pdf_stem, pdf_log,
                 full_page_gemini=True,
+                county_format_hint=_county_format_hint,
             )
         # api_error or other transient -> plain retry
-        return process_single_county(manager, out_dir, pdf_stem, pdf_log)
+        return process_single_county(
+            manager, out_dir, pdf_stem, pdf_log,
+            county_format_hint=_county_format_hint,
+        )
 
     if stage == STAGE_LOCATION:
         # Retry: loosen the vertical-overlap threshold for str_keywords,
         # AND retry location_keyword with the looser threshold.
         # Try location_keyword first (for mid/late/modern), then str_keywords fallback.
+        # Form-type hints are forwarded so zone filtering is preserved on retry.
         from location.location_extractor import process_single_location
         from location.location_keyword_extractor import process_single_location_keyword
         kw_result = process_single_location_keyword(manager, out_dir, pdf_stem, pdf_log)
@@ -1307,6 +1339,9 @@ def _retry_one_stage(stage: str, error_type: str, manager, out_dir: Path,
         return process_single_location(
             manager, out_dir, pdf_stem, pdf_log,
             min_overlap=LOCATION_MIN_OVERLAP_RETRY,
+            str_strategy_hint=_str_strategy_hint,
+            str_zone=_str_zone,
+            grid_bbox=_grid_bbox,
         )
 
     if stage == STAGE_GRID:
@@ -1364,6 +1399,19 @@ def _retry_record(record: DatasetRecord, stages: tuple,
     # Always attempt the anchor pass; falls through to full-page CV if not found.
     _skip_anchor = False
 
+    # Reconstruct form-type classifier hints from the saved CSV row.
+    # These allow the retry dispatch to forward search-region hints to
+    # location + county extractors just as the normal dispatch path does.
+    _saved_row   = status._rows.get(record.pdf_stem, {})
+    _grid_retry_hints = {
+        "form_type":          _saved_row.get("grid_form_type", ""),
+        "str_zone":           _saved_row.get("grid_str_zone", ""),
+        "county_format_hint": _saved_row.get("grid_county_format_hint", ""),
+        "str_strategy_hint":  _saved_row.get("grid_str_strategy_hint", ""),
+        "bbox":               None,   # pixel coords not persisted; zone hint still works
+        "anchor_phrase":      _saved_row.get("grid_anchor_phrase", ""),
+    }
+
     parts: list[str] = []
     for stage in stages:
         if status.get_status(record.pdf_stem, stage) != FAILED:
@@ -1374,7 +1422,8 @@ def _retry_record(record: DatasetRecord, stages: tuple,
         try:
             r = _retry_one_stage(stage, et, manager,
                                  stage_dirs[stage], record.pdf_stem, pdf_log,
-                                 skip_anchor=_skip_anchor)
+                                 skip_anchor=_skip_anchor,
+                                 grid_result=_grid_retry_hints)
         except Exception as exc:
             pdf_log.error("[retry][%s] unhandled: %s", stage, exc, exc_info=True)
             r = {"detected": False, "error": str(exc)}

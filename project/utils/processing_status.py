@@ -1,11 +1,13 @@
 """
 Per-record, per-stage processing tracker backed by a CSV file.
 
-Schema (44 columns, one row per PDF):
+Schema (49 columns, one row per PDF):
 
   Identity      : pdf_stem, pdf_path, zip_path, collection, collection_num, year, month, model_tier
   Lat/Lon stage : latlong_status, latlong_confidence, latlong_error_type, latlong_lat, latlong_lon, latlong_page
-  Grid stage    : grid_status, grid_confidence, grid_error_type, grid_page, grid_method, grid_image_path
+  Grid stage    : grid_status, grid_confidence, grid_error_type, grid_page, grid_method, grid_image_path,
+                  grid_form_type, grid_str_zone, grid_county_format_hint,
+                  grid_str_strategy_hint, grid_anchor_phrase
   Location stage: location_status, location_confidence, location_error_type,
                   location_section, location_township, location_range,
                   location_quadrant_pdf, location_quadrant_db
@@ -46,6 +48,9 @@ _FIELDNAMES = [
     # grid stage
     "grid_status",     "grid_confidence",  "grid_error_type",
     "grid_page",       "grid_method",      "grid_image_path",
+    # grid form-type classifier outputs (populated after grid detection)
+    "grid_form_type",  "grid_str_zone",    "grid_county_format_hint",
+    "grid_str_strategy_hint",              "grid_anchor_phrase",
     # location stage (Section / Township / Range)
     "location_status", "location_confidence", "location_error_type",
     "location_section", "location_township", "location_range",
@@ -234,9 +239,16 @@ class ProcessingStatus:
             }
         elif stage == "grid":
             extra = {
-                "grid_page":       str(result.get("page", "")),
-                "grid_method":     result.get("method", ""),
-                "grid_image_path": result.get("image_path", ""),
+                "grid_page":               str(result.get("page", "")),
+                "grid_method":             result.get("method", ""),
+                "grid_image_path":         result.get("image_path", ""),
+                # Form-type classifier outputs — consumed on resume to
+                # reconstruct hints for location + county dispatching.
+                "grid_form_type":          str(result.get("form_type", "") or ""),
+                "grid_str_zone":           str(result.get("str_zone", "") or ""),
+                "grid_county_format_hint": str(result.get("county_format_hint", "") or ""),
+                "grid_str_strategy_hint":  str(result.get("str_strategy_hint", "") or ""),
+                "grid_anchor_phrase":      str(result.get("anchor_phrase", "") or ""),
             }
         elif stage == "location":
             extra = {

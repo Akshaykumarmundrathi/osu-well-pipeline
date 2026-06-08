@@ -35,8 +35,9 @@ from utils.io_utils import annotate_page
 
 # -- Regex helpers -------------------------------------------------------------
 
-# Stand-alone section: just the digits in context, e.g. "SEC 14", "sec. 22"
-_SEC_RE = re.compile(r"\bsec(?:tion)?\.?\s*(\d{1,2})\b", re.I)
+# Stand-alone section: "SEC 14", "sec. 22", "Sect 14" (Collection 9 variant)
+_SEP = r"[\.\-\s]"
+_SEC_RE = re.compile(rf"\bsec(?:tion|t)?{_SEP}*(\d{{1,2}})\b", re.I)
 
 # Township with required direction: 18N / T-18N / Twp 27N
 _TWP_RE = re.compile(

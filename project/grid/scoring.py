@@ -8,20 +8,22 @@ Strategy
 --------
 Each page is tried in this order:
 
-  1. **Structural anchor**: OCR the page (Vision API; cached on the
-     manager), look for one of the printed phrases that always sits
-     beside the STR grid ('spot well located' / 'Locate Well' /
-     'Locate Well correctly'). When found, crop a fixed region above
-     or below the anchor and run the CV extractors on the crop. This
-     succeeds even when the grid's overall size is unusual, because
-     we've already isolated its location.
+  1. **Structural anchor**: OCR the page (Tesseract / Vision API; cached on
+     the manager), look for one of the printed phrases beside the STR grid:
+     'Spot Well Correctly' / 'Locate Well Correctly' / 'LOCATE WELL' /
+     'Locate Well And Dotline Lease'.  When found, crop a fixed region
+     above/below the anchor and run the CV extractors on the crop.
 
-  2. **Full-page CV** (current fallback): run all six extractors on
-     the entire page image and pick the best 4-vertex candidate.
+  2. **Full-page CV** (fallback): run all six extractors on the entire
+     page image and pick the best 4-vertex candidate.
 
-Pages are iterated in REVERSE for `relaxed=False` (grid is usually on
-the back page of well-record sheets) and FORWARD for `relaxed=True`
-(retry path, looser size band).
+Pages are iterated in FORWARD order (page 1 first) for BOTH passes.
+Rationale: the vast majority of forms (Collections 1–13) place the grid on
+the FIRST page — bottom-left for early T1/T2 forms, top-left for T3 forms,
+top-center/right for mid/late forms.  Only a small subset of Collection 8+
+multi-page forms have the traditional grid on page 3; forward order still
+finds it (pages 1, 2, 3 scanned in order) while avoiding false-positive
+detections on back-page content before reaching the correct front page.
 """
 
 import logging
@@ -216,12 +218,13 @@ def process_single_grid(
     """
     Detect the section-township-range grid box on one of the PDF's pages.
 
-    `relaxed=False`    -- strict size band, REVERSE page order (back-page first).
+    `relaxed=False`    -- strict size band, FORWARD page order (page 1 first).
     `relaxed=True`     -- loose size band, FORWARD page order (retry path).
-    `skip_anchor=True` -- skip the structural-anchor OCR pass and go straight
-                          to full-page CV.  Use for early/transition tiers
-                          (handwritten 1911–1950s PDFs) where there is no
-                          printable anchor phrase and Tesseract just spins.
+    `skip_anchor=False` (always) -- attempt the structural-anchor OCR pass
+                          first; falls through to full-page CV if no phrase
+                          is found.  Anchor phrases are PRINTED text on all
+                          collection tiers (confirmed Jun 2025 inspection of
+                          Colls 1–13).
 
     Each page is tried first with the structural anchor (unless skip_anchor),
     then falls back to the full-page CV extractors.
@@ -232,13 +235,17 @@ def process_single_grid(
     if relaxed:
         w_min, w_max = GRID_W_LOOSE
         h_min, h_max = GRID_H_LOOSE
-        page_order   = lambda pages: pages
         mode         = "loose"
     else:
         w_min, w_max = GRID_W_STRICT
         h_min, h_max = GRID_H_STRICT
-        page_order   = reversed
         mode         = "strict"
+
+    # Always iterate FORWARD (page 1 first).  Grid is on the front/first page
+    # for the vast majority of forms across all 13 collections.  Reverse order
+    # caused false-positive detections on back-page elements before reaching
+    # the real grid on page 1.
+    page_order = lambda pages: pages
 
     result = {"detected": False, "page": None, "bbox": None,
               "method": None, "confidence": 0, "image_path": None}

@@ -55,9 +55,32 @@ def _clean(v: str) -> str:
     return re.sub(r"\s+", "", v).strip() if v else ""
 
 
-_SEC_RE = re.compile(r"sec(?:tion)?\.?\s*(\d{1,2})\b", re.I)
-_TWP_RE = re.compile(r"t(?:ownship|wn|vp|wp)\.?\s*(\d{1,3}(?:\s*[NS])?)", re.I)
-_RNG_RE = re.compile(r"r(?:ange|ge)\.?\s*(\d{1,3}(?:\s*[EW])?)", re.I)
+# Separator character class used between a field label and its value.
+# Handles: period, dash/en-dash, space, newline — all observed in real forms.
+_SEP = r"[\.\-\s]"
+
+# Section: "Section 19", "SEC 12", "SEC-12", "Sec. 18", "Sec - 12", "Sect 14"
+_SEC_RE = re.compile(rf"\bsec(?:tion|t)?{_SEP}*(\d{{1,2}})\b", re.I)
+
+# Township variants observed across all 13 collections:
+#   Variant A/B/C: "Township 18N", "TWP 23N", "Twp. 18", "tvp 18N"
+#   Variant D:     "T - 23N"  (bare T label, common on early/transition forms)
+#   Requires at least one separator after bare "T" to avoid false matches on
+#   English words ("the", "to", "type" all fail because [\.\-\s]+ needs ≥1 sep).
+_TWP_RE = re.compile(
+    rf"\bt(?:ownship|wn|vp|wp)?{_SEP}+(\d{{1,3}}(?:{_SEP}*[NS])?)",
+    re.I,
+)
+
+# Range variants observed across all 13 collections:
+#   Variant A/B/C: "Range 10W", "RGE 10W", "Rge. 8E"
+#   Variant D:     "R - 10W"  (bare R label)
+#   Same separator-required guard as township.
+_RNG_RE = re.compile(
+    rf"\br(?:ange|ge)?{_SEP}+(\d{{1,3}}(?:{_SEP}*[EW])?)",
+    re.I,
+)
+
 # Bare-number regex for per-keyword right-side extraction.
 _NUM_RE = re.compile(r"(\d{1,3})\s*([NSEW])?", re.I)
 
@@ -99,10 +122,12 @@ def _extract_str(raw: str) -> tuple[str, str, str]:
     """
     Pull (section, township, range) values from a free-text blob.
 
-    Handles three 1911-era Oklahoma form layouts:
-      A) "Section 19  Township 18  Range 12"       — standard _SEC_RE match
-      B) "SECTION SW/4 of 13 TOWNSHIP 18 RANGE 11" — 'of N' fallback
-      C) "Sec. 18  Twp. 18  Range 7"              — abbreviated _SEC_RE match
+    Handles all observed Oklahoma form label variants (Collections 1–13):
+      A) "Section 19  Township 18N  Range 12W"   — full keyword
+      B) "SECTION SW/4 of 13 TOWNSHIP 18 RANGE 11" — 'of N' fallback for quad prefix
+      C) "Sec. 18  Twp. 18  Range 7"             — abbreviated with period
+      D) "SEC - 12  T - 23N  R - 10W"            — dash-separated labels (early forms)
+      E) "SEC  TWP  RGE  Well No." layout         — W from "Well" rejected by \b guard
     """
     sec_m = _SEC_RE.search(raw)
     twp_m = _TWP_RE.search(raw)

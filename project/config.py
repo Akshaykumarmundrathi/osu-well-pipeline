@@ -158,7 +158,9 @@ ILLEGIBLE_WORD_THRESHOLD   = 15
 # the *_RETRY values which scan deeper.
 MAX_LATLONG_PAGES        = 2
 MAX_LATLONG_PAGES_RETRY  = 99      # scan everything on retry
-MAX_COUNTY_PAGES         = 2
+# County keyword can appear on page 3 in Collection 8+ multi-page permit forms
+# where the traditional grid/STR block is on the third scanned page.
+MAX_COUNTY_PAGES         = 3
 MAX_COUNTY_PAGES_RETRY   = 99
 
 # Collections numbered below this never run the latlong stage.
@@ -300,7 +302,9 @@ TIER_CONFIG = {
 
 # Keywords used by the new 'Location:' extractor in mid/late/modern tiers.
 # Variants account for OCR drops (the colon often isn't recognised).
+# Sources: form inspection across all 13 collections.
 LOCATION_LINE_KEYWORDS = [
     "location:", "location",  "locality:",  "locality",
     "well location", "surface location", "spot well location",
+    "subsurface location",          # directional well forms (Coll 11 2010+)
 ]

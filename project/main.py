@@ -1130,12 +1130,31 @@ def _dispatch(stage: str, manager: PDFDocumentManager,
                 tier_for(record.collection_num),
                 {"location_strategy": "str_keywords"},
             )["location_strategy"]
+
         if strategy == "location_keyword":
+            # Primary: "Location:" single-line extractor (Collections 9+).
             from location.location_keyword_extractor import (
                 process_single_location_keyword,
             )
-            return process_single_location_keyword(manager, out_dir,
-                                                   pdf_stem, log)
+            result = process_single_location_keyword(manager, out_dir, pdf_stem, log)
+            if result.get("detected"):
+                return result
+
+            # Fallback: classic SEC/TWP/RGE keyword extractor.
+            # Necessary for historical form types that recur in later collections:
+            #   - Coll 10 (~1999): "Bottom-left Spot Well Correctly" T2 forms
+            #   - Coll 11 (~2016): "Bottom-left / Top-left" early-style forms
+            # These use three separate SEC/TWP/RGE label columns, not a Location: line.
+            log.debug("location_keyword strategy not detected — falling back to str_keywords")
+            from location.location_extractor import process_single_location
+            fallback = process_single_location(manager, out_dir, pdf_stem, log)
+            if fallback.get("detected"):
+                fallback["strategy_used"] = "str_keywords_fallback"
+                return fallback
+
+            # Return the original (undetected) result so the error field is preserved.
+            return result
+
         from location.location_extractor import process_single_location
         return process_single_location(manager, out_dir, pdf_stem, log)
 
@@ -1205,7 +1224,14 @@ def _retry_one_stage(stage: str, error_type: str, manager, out_dir: Path,
         return process_single_county(manager, out_dir, pdf_stem, pdf_log)
 
     if stage == STAGE_LOCATION:
+        # Retry: loosen the vertical-overlap threshold for str_keywords,
+        # AND retry location_keyword with the looser threshold.
+        # Try location_keyword first (for mid/late/modern), then str_keywords fallback.
         from location.location_extractor import process_single_location
+        from location.location_keyword_extractor import process_single_location_keyword
+        kw_result = process_single_location_keyword(manager, out_dir, pdf_stem, pdf_log)
+        if kw_result.get("detected"):
+            return kw_result
         return process_single_location(
             manager, out_dir, pdf_stem, pdf_log,
             min_overlap=LOCATION_MIN_OVERLAP_RETRY,

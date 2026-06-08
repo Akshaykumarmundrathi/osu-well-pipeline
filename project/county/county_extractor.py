@@ -20,6 +20,7 @@ Retry path may invoke this with `crop_scale > 1.0` to widen the crop or
 """
 
 import logging
+import re
 from pathlib import Path
 
 from config import (

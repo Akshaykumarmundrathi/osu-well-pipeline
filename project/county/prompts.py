@@ -38,11 +38,25 @@ Reply with ONLY the county name (e.g. Creek County). If absent: Not detected."""
 # ---------------------------------------------------------------------------
 # Global rate limiter — enforces min gap between Gemini API calls.
 # GEMINI_MIN_CALL_GAP_S env var: default 3s (free tier ≈ 20 RPM effective).
-# Set to 2.0 on a paid project, or 6.0 if hitting 429s frequently.
+#
+# Multi-process note: _CALL_GAP and _rate_lock are per-process (multiprocessing
+# workers do NOT share state).  With N workers each calling at 1/gap RPS, the
+# combined rate is N/gap.  To stay within the free-tier 15 RPM limit:
+#   gap_s ≥ N_workers × (60 / 15) = N_workers × 4.0 s
+# Examples:  1 worker → 4.5 s    2 workers → 9.0 s
+#
+# Startup jitter: initialise _last_call to a random offset in [0, _CALL_GAP)
+# seconds ago.  This staggers parallel worker processes so their first Gemini
+# calls are spread across the gap window instead of bursting simultaneously.
+# Without jitter, all workers start with _last_call=0 → first calls fire at
+# the same instant → both hit the per-minute quota limit together.
 # ---------------------------------------------------------------------------
 _CALL_GAP  = float(os.environ.get("GEMINI_MIN_CALL_GAP_S", "3.0"))
 _rate_lock = threading.Lock()
-_last_call = 0.0
+# Random startup offset staggers workers: each process independently picks a
+# point in [0, _CALL_GAP) seconds ago as its "last call", so their first
+# actual calls are naturally spread across the full gap window.
+_last_call = time.monotonic() - random.uniform(0.0, _CALL_GAP)
 
 # Per-model quota-exhaustion state: if a model hits 429, back off separately.
 # Maps model_name -> (backoff_until_monotonic, consecutive_429_count)

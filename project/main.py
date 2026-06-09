@@ -1559,19 +1559,69 @@ def run_pipeline(args):
 
     atexit.register(status.force_save)
 
-    # Disk-backed Vision API cache (survives restarts and spot interruptions).
+    # ── Stop / pause file ────────────────────────────────────────────────────
+    # Drop an empty file called STOP (or PAUSE) in the output directory to
+    # trigger a graceful shutdown after the current month-batch finishes.
+    # Works on Windows, Linux, and in Docker — no signals needed.
+    #
+    # Usage:
+    #   echo "" > D:\project_outputs\STOP    → stop after this batch
+    #   del D:\project_outputs\STOP          → resume on next run
+    #
+    # On AWS Batch / EC2: write the file to the EFS mount or S3-sync folder.
+    _STOP_FILE  = output_root / "STOP"
+    _PAUSE_FILE = output_root / "PAUSE"
+
+    def _check_stop_file() -> bool:
+        """Return True if a STOP or PAUSE file exists in the output directory."""
+        return _STOP_FILE.exists() or _PAUSE_FILE.exists()
+
+    def _save_and_checkpoint(label: str = ""):
+        """
+        Flush status CSV, then upload to S3 if S3_CHECKPOINT_PREFIX is set.
+        Called after every month-batch and on shutdown.
+        """
+        status.force_save()
+        _s3_checkpoint(output_root, label=label)
+
+    # ── S3 live checkpoint ───────────────────────────────────────────────────
+    # When S3_CHECKPOINT_PREFIX is set (e.g. s3://my-bucket/well-runs/run1),
+    # every force_save uploads processing_status.csv so it survives:
+    #   - Local machine crash / power loss
+    #   - WiFi disconnect mid-run (keeps state through reconnect)
+    #   - AWS Spot interruption
+    #   - Manual Ctrl+C followed by re-run on a different machine
+    #
+    # Set S3_CHECKPOINT_PREFIX in .env or as env var:
+    #   S3_CHECKPOINT_PREFIX=s3://osu-well-records-prod/checkpoints/full_run
+    _S3_CHECKPOINT = os.environ.get("S3_CHECKPOINT_PREFIX", "").rstrip("/")
+
+    def _s3_checkpoint(root: Path, label: str = ""):
+        if not _S3_CHECKPOINT:
+            return
+        try:
+            from utils.s3_reader import upload_file_to_s3
+            s3_key = f"{_S3_CHECKPOINT.split('/',3)[-1]}/processing_status.csv"
+            bucket  = _S3_CHECKPOINT.split("/")[2]
+            upload_file_to_s3(str(root / "processing_status.csv"), bucket, s3_key)
+            if label:
+                log.debug("S3 checkpoint uploaded [%s] → s3://%s/%s", label, bucket, s3_key)
+        except Exception as _s3e:
+            log.warning("S3 checkpoint upload failed (%s) — local state still safe", _s3e)
+
+    # ── Disk-backed Vision API cache ─────────────────────────────────────────
+    # Survives restarts and spot interruptions. On the same machine, cache
+    # hits mean zero Vision API cost for re-runs of already-OCR'd pages.
     from utils.api_cache import init_cache
     _api_cache = init_cache(output_root)
     _cache_stats_before = _api_cache.stats()
 
     # County → PLSS bounds cache: built once, reused across runs.
-    # Improves direction-inference for partial PLSS records.
     _county_constraints_dir = output_root
     from coord.county_constraints import load as _load_cc, build_and_save as _build_cc
     if not (_county_constraints_dir / "county_constraints.json").exists():
         _p("  Building county constraints from RDS (one-time)...")
         try:
-            import os
             _build_cc(
                 _county_constraints_dir,
                 host=os.environ.get("RDS_HOST", ""),
@@ -1584,20 +1634,24 @@ def run_pipeline(args):
         except Exception as _cc_exc:
             _p(f"  county constraints build skipped: {_cc_exc}")
 
-    # Graceful Docker shutdown: flush status before process is killed.
-    # Exit 130 (128 + SIGTERM=15) signals preemption to the parent wrapper
-    # (run_batch_job.py) so it does NOT mark the slice as successfully complete.
+    # ── Signal handlers ──────────────────────────────────────────────────────
+    # SIGTERM: Docker / AWS Batch spot-interruption → flush + exit 130
+    #   run_batch_job.py interprets exit 130 as "preempted, checkpoint kept"
+    # SIGINT (Ctrl+C): local graceful stop → flush + exit 0
     import signal
-    def _sigterm_handler(signum, frame):
-        _p("\n  SIGTERM received — flushing status and exiting (preempted)...")
-        # Wrap force_save in try/except: the .tmp rename can fail if OUTPUT_ROOT
-        # isn't yet writable (e.g. SIGTERM arrives before the first status write).
+
+    def _graceful_exit(signum, frame, exit_code: int = 130):
+        sig_name = {2: "Ctrl+C", 15: "SIGTERM"}.get(signum, f"signal {signum}")
+        _p(f"\n  {sig_name} — flushing state and exiting...")
         try:
-            status.force_save()
+            _save_and_checkpoint(label=f"{sig_name}_shutdown")
         except Exception as _se:
-            _p(f"  force_save error during SIGTERM (non-fatal): {_se}")
-        sys.exit(130)
-    signal.signal(signal.SIGTERM, _sigterm_handler)
+            _p(f"  checkpoint error (non-fatal): {_se}")
+        _p("  State saved. Re-run to resume from this exact point.")
+        sys.exit(exit_code)
+
+    signal.signal(signal.SIGTERM, lambda s, f: _graceful_exit(s, f, exit_code=130))
+    signal.signal(signal.SIGINT,  lambda s, f: _graceful_exit(s, f, exit_code=0))
 
     _run_start = time.monotonic()
 
@@ -1768,7 +1822,7 @@ def run_pipeline(args):
         # Month summary
         _p(f"\n  Month complete: {month_done} done | {month_failed} failed | {month_skipped} skipped")
 
-        status.force_save()
+        _save_and_checkpoint(label=f"{collection}/{year}/{month}")
         _print_review_summary(output_root, _before_month,
                               f"{collection}/{year}/{month}")
         _totals_line(total_done, total_failed, total_skipped, len(records))
@@ -1776,10 +1830,20 @@ def run_pipeline(args):
         year_group_records.extend(month_recs)
         prev_year_key = cur_year_key
 
+        # ── Stop / pause file check ──────────────────────────────────────
+        # Check AFTER the checkpoint so state is always safe before we stop.
+        if _check_stop_file():
+            stop_kind = "STOP" if _STOP_FILE.exists() else "PAUSE"
+            _p(f"\n  {stop_kind} file detected in {output_root}")
+            _p(f"  Completed: {total_done + total_failed + total_skipped:,} / {len(records):,} records")
+            _p(f"  Remove {output_root / stop_kind} and re-run to continue.")
+            _stage_quality_summary(status)
+            sys.exit(0)
+
     _print_review_summary(output_root, _before_run, "full run")
 
     # -- Final summary ---------------------------------------------------------
-    status.force_save()
+    _save_and_checkpoint(label="run_complete")
     counts = status.counts()
 
     _banner(
@@ -1797,9 +1861,18 @@ def run_pipeline(args):
 
     _stage_quality_summary(status)
     _p()
-    write_summary_csvs(status, output_root)
-    write_latlong_csv(status, output_root / "latlong_records.csv")
-    write_dot_locations_csv(status, output_root / "dot_locations.csv")
+
+    # Derived CSVs are generated on demand (--export flag) rather than at
+    # the end of every run.  This keeps the hot path fast and avoids O(n)
+    # file rewrites on very large runs (570K+ records).
+    # Run separately:  python main.py --export --output <dir>
+    if getattr(args, "export_summaries", False):
+        write_summary_csvs(status, output_root)
+        write_latlong_csv(status, output_root / "latlong_records.csv")
+        write_dot_locations_csv(status, output_root / "dot_locations.csv")
+        _p(f"  Summary CSVs written → {output_root}")
+    else:
+        _p(f"  Tip: run with --export to generate success.csv / dot_locations.csv")
 
     try:
         md_path, json_path = insights.write()
@@ -1904,6 +1977,17 @@ def main():
                          "Set to N <= os.cpu_count() for ~Nx speedup.")
     ap.add_argument("--verbose",   action="store_true",
                     help="Show DEBUG output on console")
+    ap.add_argument("--export",    dest="export_summaries", action="store_true",
+                    help="After processing, write success.csv / dot_locations.csv / "
+                         "latlong_records.csv (derived from processing_status.csv; "
+                         "slow on large runs — skip for incremental cloud runs)")
+    # Stop/pause file management: creates/removes the STOP sentinel file.
+    # Equivalent to:  echo "" > <output>/STOP   or   del <output>/STOP
+    ap.add_argument("--stop",   action="store_true",
+                    help="Create STOP file in output dir — pipeline will exit gracefully "
+                         "after the current month-batch completes")
+    ap.add_argument("--unstop", action="store_true",
+                    help="Remove STOP/PAUSE file so the next run continues")
     # AWS Batch slice args: partition the dataset_index into N equal slices
     # and process only slice number I (0-based).  run_batch_job.py sets these
     # via env vars BATCH_SLICE_INDEX / BATCH_TOTAL_SLICES.
@@ -1927,6 +2011,34 @@ def main():
 
     if args.status:
         print_status(Path(args.output) / "processing_status.csv")
+        return
+
+    # Stop / unstop: create or remove the STOP sentinel without running the pipeline.
+    out = Path(args.output)
+    if args.stop:
+        stop_f = out / "STOP"
+        stop_f.parent.mkdir(parents=True, exist_ok=True)
+        stop_f.write_text("stop requested\n", encoding="utf-8")
+        _p(f"  STOP file created: {stop_f}")
+        _p("  The pipeline will exit after the current batch finishes.")
+        return
+    if args.unstop:
+        for f in [out / "STOP", out / "PAUSE"]:
+            if f.exists():
+                f.unlink()
+                _p(f"  Removed {f}")
+        _p("  Re-run the pipeline to continue from where it left off.")
+        return
+
+    # Export-only mode: regenerate derived CSVs from existing processing_status.
+    if getattr(args, "export_summaries", False) and not (
+        args.pdf or args.flat or args.scan or args.index
+    ):
+        status = ProcessingStatus(out / "processing_status.csv")
+        write_summary_csvs(status, out)
+        write_latlong_csv(status, out / "latlong_records.csv")
+        write_dot_locations_csv(status, out / "dot_locations.csv")
+        _p(f"  Exported → {out}")
         return
 
     run_pipeline(args)

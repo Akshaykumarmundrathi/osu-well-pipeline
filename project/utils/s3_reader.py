@@ -46,6 +46,39 @@ def get_pdf_bytes_s3_flat(pdf_uri: str) -> bytes:
         raise
 
 
+def upload_file_to_s3(local_path: str, bucket: str, key: str) -> None:
+    """
+    Upload a single file to s3://bucket/key.
+    Raises on failure (caller decides whether to swallow or propagate).
+    """
+    try:
+        _client().upload_file(local_path, bucket, key)
+        log.debug("S3 upload OK: %s → s3://%s/%s", local_path, bucket, key)
+    except Exception as exc:
+        log.error("S3 upload failed %s → s3://%s/%s: %s", local_path, bucket, key, exc)
+        raise
+
+
+def download_file_from_s3(bucket: str, key: str, local_path: str) -> bool:
+    """
+    Download s3://bucket/key to local_path.
+    Returns True on success, False if the object does not exist.
+    Raises on other errors (permissions, network, access denied).
+    """
+    try:
+        _client().download_file(bucket, key, local_path)
+        log.debug("S3 download OK: s3://%s/%s → %s", bucket, key, local_path)
+        return True
+    except Exception as exc:
+        # botocore.exceptions.ClientError has a structured response dict;
+        # boto3 transfer errors wrap it.  Check both for NoSuchKey / 404.
+        err = str(exc)
+        if "NoSuchKey" in err or "404" in err or "Not Found" in err:
+            return False
+        log.error("S3 download failed s3://%s/%s: %s", bucket, key, exc)
+        raise
+
+
 def upload_directory(local_dir, bucket: str, key_prefix: str) -> int:
     """
     Upload every file under local_dir to s3://bucket/<key_prefix>/relpath.

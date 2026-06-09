@@ -394,11 +394,11 @@ TIER_CONFIG = {
         #   handwritten but the labels are always machine-printed.
         # T2_MED   (Colls 1-4, top-left grid):    Same labels, upper-right block.
         # T3_SMALL (Colls 4-6, top-left portrait): Small printed labels.
-        # → run_location is False by DEFAULT but overridden per-record in
-        #   main.py when form_type ∈ {T1_LARGE, T2_MED, T3_SMALL} (i.e. the
-        #   grid was found and it's a known form type with printed labels).
+        # All three form types have PRINTED SEC/TWP/RGE labels — the old
+        # version always attempted extraction.  Gate via ILLEGIBLE_WORD_THRESHOLD
+        # (15 tokens) in the extractor itself, not via a blanket tier skip.
         "run_latlong":        False,
-        "run_location":       False,    # overridden when grid+form_type known
+        "run_location":       True,     # always attempt; illegibility guard in extractor
         "location_strategy":  "str_keywords",
         "county_format":      "name_county",   # almost universal: "Oklahoma County"
         "str_label_variant":  "full_word",     # "Section / Township / Range"

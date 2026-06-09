@@ -874,46 +874,13 @@ def _process_record_worker(arg):
                 results[stage] = SKIPPED
                 continue
 
-        # Skip location for early/transition tiers — handwritten STR values
-        # are unreadable by Tesseract (50-150s wasted per record, always
-        # returns not_found) when the form structure is unknown.
-        #
-        # OVERRIDE: if the grid stage just detected a T1_LARGE, T2_MED, or
-        # T3_SMALL form type, those forms ALWAYS have PRINTED Section/Township/
-        # Range labels (only the VALUES may be handwritten).  Enable location
-        # anyway — the printed labels let the keyword grouper succeed, and
-        # the regex can often read typed/printed values even from early records.
-        #
-        # Guard: only skip when collection_num is known (>0); unknown
-        # collections (ad-hoc --flat test runs) keep location enabled.
-        if stage == STAGE_LOCATION:
-            _cnum_loc = getattr(record, "collection_num", None) or 0
-            if _cnum_loc:
-                from config import TIER_CONFIG, tier_for as _tf_loc
-                from grid.form_classifier import (
-                    FORM_T1_LARGE, FORM_T2_MED, FORM_T3_SMALL,
-                )
-                _loc_tier = _tf_loc(_cnum_loc)
-                if not TIER_CONFIG.get(_loc_tier, {}).get("run_location", True):
-                    # Check if form classifier identified a type with printed labels.
-                    _grid_r  = results.get(STAGE_GRID)
-                    _ftype   = isinstance(_grid_r, dict) and _grid_r.get("form_type")
-                    _printed = {FORM_T1_LARGE, FORM_T2_MED, FORM_T3_SMALL}
-                    if _ftype in _printed:
-                        pdf_log.info(
-                            "Early tier %r but form_type=%s has printed STR labels "
-                            "— enabling location stage",
-                            _loc_tier, _ftype,
-                        )
-                        # Let the stage run; fall through to dispatch.
-                    else:
-                        lines.append(
-                            f"  {label:<{_COL}}skipped  "
-                            f"(tier '{_loc_tier}' — STR likely handwritten, "
-                            f"no form-type hint to override)"
-                        )
-                        results[stage] = SKIPPED
-                        continue
+        # Location is always attempted — TIER_CONFIG.run_location is True
+        # for all tiers.  The per-page illegibility guard in the extractor
+        # (ILLEGIBLE_WORD_THRESHOLD = 15 OCR tokens) gates out genuinely
+        # blank / handwritten pages far more precisely than a blanket tier
+        # skip, and without silently discarding records that DO have printed
+        # SEC/TWP/RGE labels (which is the case for all known early form types).
+        # The old monolithic version never skipped location based on tier.
 
         # Skip grid + location when lat/lon was already found (this run or prior).
         # Only apply the "prior run" branch when resume=True — with --no-resume the
@@ -1228,19 +1195,25 @@ def _dispatch(stage: str, manager: PDFDocumentManager,
     _gres               = grid_result if isinstance(grid_result, dict) else {}
     _str_strategy_hint  = _gres.get("str_strategy_hint")
     _county_format_hint = _gres.get("county_format_hint")
-    _str_zone           = _gres.get("str_zone")
+    _str_zone           = _gres.get("str_zone")   # None when grid not found
     _grid_bbox          = _gres.get("bbox")   # list [x, y, w, h] or None
 
-    # If the grid stage was skipped/missing but the tier config has a default
-    # str_zone_by_grid_zone, use the first expected zone as a fallback hint.
-    if not _str_zone and record is not None:
+    # _str_zone is ONLY set from real grid-classifier evidence (above).
+    # We deliberately do NOT fall back to a tier-default guess here.
+    # The str_zone_by_grid_zone map in TIER_CONFIG maps grid ZONE → STR zone,
+    # but without an actual grid detection result we don't know which grid zone
+    # applies.  Guessing "first entry" silently filters OCR tokens to the wrong
+    # region of the page (e.g. "top_header" for C2-C6 top-left-grid forms that
+    # have their STR block to the RIGHT of the grid) — the old version always
+    # searched the full page when the grid zone was unknown.
+    #
+    # county_format_hint is a pure ordering hint (not a spatial filter) so
+    # a tier-level default is safe and helps the structural anchor try the
+    # right token direction first.
+    if not _county_format_hint and record is not None:
         from config import TIER_CONFIG, tier_for as _tf_hint
         _tc = TIER_CONFIG.get(_tf_hint(record.collection_num), {})
-        _zone_map = _tc.get("str_zone_by_grid_zone", {})
-        if _zone_map:
-            _str_zone = next(iter(_zone_map.values()))  # first expected zone
-        if not _county_format_hint:
-            _county_format_hint = _tc.get("county_format")
+        _county_format_hint = _tc.get("county_format")
 
     if stage == STAGE_LOCATION:
         from config import TIER_CONFIG, tier_for

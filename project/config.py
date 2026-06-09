@@ -183,15 +183,45 @@ MAX_LATLONG_PAGES_RETRY  = 99      # scan everything on retry
 MAX_COUNTY_PAGES         = 3
 MAX_COUNTY_PAGES_RETRY   = 99
 
-# Collections numbered below this never run the latlong stage.
-# Inspection data (Jun 2025):
-#   Coll 8  → ~1 % of forms have lat/lon  (too rare, skip)
-#   Coll 9  → ~10% have lat/lon           (worthwhile — enable)
-#   Coll 10 → ~18% have lat/lon           (worthwhile — enable)
-#   Coll 11+→ >85% have lat/lon           (dominant)
-# Authoritative source is now tier_for() + TIER_CONFIG['run_latlong'].
-# This constant is kept for backward compat with older code paths.
-LATLONG_MIN_COLLECTION_NUM = 9
+# Per-collection lat/lon presence probability — calibrated from the
+# 1300-record test100 run (2026-06-08).  These are ACTUAL success rates,
+# not aspirational estimates.  Replaces the old TIER_CONFIG run_latlong
+# flags which were badly wrong for C9-C11 (claimed >85%, actual 1-3%).
+#
+#   C1-C8  → 0 %  (no lat/lon fields on these forms — confirmed)
+#   C9-C10 → ~1%  (rare exception, not worth a Vision API call)
+#   C11    → ~3%  (same — skip to save cost)
+#   C12    → ~29% (worth running)
+#   C13    → ~77% (digital forms — always run)
+#
+# Gate: only run the latlong stage if the collection's prior ≥ LATLONG_MIN_PRIOR.
+# This prevents wasting Vision API budget on collections where lat/lon is absent
+# from virtually every form.
+_LATLONG_PRIOR: dict[int, float] = {
+    1: 0.00, 2: 0.00, 3: 0.00, 4: 0.00, 5: 0.00, 6: 0.00,  # EARLY
+    7: 0.00, 8: 0.00,                                         # TRANSITION
+    9: 0.01, 10: 0.01,                                        # MID (1% actual)
+    11: 0.03,                                                  # LATE low (3% actual)
+    12: 0.29,                                                  # LATE high (29% actual)
+    13: 0.77,                                                  # MODERN (77% actual)
+}
+
+# Minimum probability threshold to attempt lat/lon extraction.
+# At 5%, the expected benefit (29% × 1 stage saved downstream + direct coords)
+# outweighs the Vision API cost ($0.0015/call).
+LATLONG_MIN_PRIOR: float = 0.05
+
+# Kept for backward compat with older code paths (e.g. run_batch_job.py).
+LATLONG_MIN_COLLECTION_NUM = 12  # updated from 9 to reflect actual data
+
+
+def latlong_prior(collection_num: int | None) -> float:
+    """
+    Return the estimated probability that a form from this collection has
+    printed lat/lon coordinates.  Data-driven from the Jun 2026 test100 run.
+    Returns 0.0 for unknown/None collections (safe-fail: skip the stage).
+    """
+    return _LATLONG_PRIOR.get(collection_num or 0, 0.0)
 
 # -- Retry heuristics ----------------------------------------------------------
 # Crop multiplier used by the county no_match retry strategy.
@@ -252,8 +282,8 @@ _TIER_BOUNDARIES = [
 TIER_DESCRIPTIONS = {
     TIER_EARLY:      "Collections 1–6  (1911–1970)  — printed SEC/TWP/RGE, 8×8 dot grid, no lat/lon",
     TIER_TRANSITION: "Collections 7–8  (1971–1982)  — small grid (~13% wide), STR top-center, rare lat/lon",
-    TIER_MID:        "Collections 9–10 (1983–2000)  — grid shifts to top-center, lat/lon on ~10-18% of forms",
-    TIER_LATE:       "Collections 11–12 (2001–2018) — LOCATE WELL grid top-center/right, lat/lon dominant (>85%)",
+    TIER_MID:        "Collections 9–10 (1983–2000)  — grid shifts to top-center, lat/lon on ~1% of forms (actual)",
+    TIER_LATE:       "Collections 11–12 (2001–2018) — LOCATE WELL grid top-center/right, lat/lon C11=3% C12=29% (actual)",
     TIER_MODERN:     "Collections 13+  (2019–2024)  — digital forms, decimal degrees standard",
 }
 
@@ -388,7 +418,9 @@ TIER_CONFIG = {
         #   "Sect 14, T-18N, R-13E, Tulsa County" → location_keyword.
         # Coll 10 (~1990): top-center, "LOCATE WELL" anchor.
         #   STR labels to the LEFT of the grid.
-        # Both sub-collections have ~10-18% lat/lon records.
+        # Both sub-collections have ~1% lat/lon records (test100 actual data).
+        # run_latlong is True here for completeness but latlong_prior() returns
+        # 0.01 for both, which is below LATLONG_MIN_PRIOR=0.05 → stage skipped.
         "run_latlong":        True,
         "run_location":       True,
         "location_strategy":  "location_keyword",
@@ -410,7 +442,9 @@ TIER_CONFIG = {
         #   County    SEC    TWP    RGE
         #   Garvin    15     23N    10W
         # → county_format='stacked'; str_strategy_hint='vertical_stack'.
-        # Lat/lon dominant (>85% of records).
+        # Lat/lon: C11=3% (rare), C12=29% (common).
+        # The run_latlong flag here is overridden by latlong_prior() which
+        # checks per-collection-num; see config.LATLONG_MIN_PRIOR.
         "run_latlong":        True,
         "run_location":       True,
         "location_strategy":  "location_keyword",

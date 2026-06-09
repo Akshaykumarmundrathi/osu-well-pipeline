@@ -770,9 +770,10 @@ def _process_record_worker(arg):
       (record, stages, output_root_str, resume, prior_row, record_num, total,
        skip_failed)
 
-    skip_failed (bool, default False): when True, previously-failed stages are
-      treated as terminal and skipped without re-running.  Set by --no-retry so
-      a resumed run does NOT re-issue Vision API calls for deterministic failures.
+    skip_failed (bool): when True, previously-failed stages are treated as
+      terminal and skipped without re-running.  Always True when resume=True
+      (single-pass policy: failures are classified and logged, never retried
+      inline).  False only when --no-resume forces a complete re-run.
     """
     # Unpack — skip_failed is optional (backward-compat with older callers)
     if len(arg) == 8:
@@ -858,15 +859,17 @@ def _process_record_worker(arg):
                               "error": prior_row.get(f"{stage}_error_type", "skipped_no_retry")}
             continue
 
-        # Latlong collection gate (tier-aware).
+        # Latlong collection gate (data-driven per-collection prior).
+        # Uses calibrated actual success rates from test100 (Jun 2026).
+        # C9-C11 had 1-3% actual success → skip to save Vision API budget.
+        # C12=29%, C13=77% → run (worthwhile).
         if stage == STAGE_LATLONG:
-            from config import TIER_CONFIG, tier_for
-            tier  = tier_for(record.collection_num)
-            run_l = TIER_CONFIG.get(tier, {"run_latlong": False})["run_latlong"]
-            if not run_l:
+            from config import latlong_prior, LATLONG_MIN_PRIOR
+            _ll_prior = latlong_prior(record.collection_num)
+            if _ll_prior < LATLONG_MIN_PRIOR:
                 lines.append(
                     f"  {label:<{_COL}}skipped  "
-                    f"(tier '{tier}' has no lat/lon on form)"
+                    f"(coll {record.collection_num}: {_ll_prior:.0%} of forms have lat/lon)"
                 )
                 results[stage] = SKIPPED
                 continue
@@ -1127,6 +1130,13 @@ def _apply_results(record: DatasetRecord, stages: tuple,
     Mirror the inline status mutations the original sequential worker did.
     Called from the parent process so the master ProcessingStatus and
     failed_records.csv are updated from a single writer.
+
+    Latlong special case: detected=False with no error means the stage ran
+    successfully but found no coordinates on the form.  We mark this as
+    FAILED(ll_no_text) rather than DONE so:
+      - latlong_status=done ONLY when actual coordinates were extracted
+      - failed(ll_no_text) is queryable separately from API errors
+      - on resume, skip_failed treats this as terminal (no re-run)
     """
     for stage in stages:
         r = results.get(stage)
@@ -1136,10 +1146,19 @@ def _apply_results(record: DatasetRecord, stages: tuple,
         if isinstance(r, dict):
             if r.get("_was_done"):
                 continue   # nothing to do; status already DONE from prior run
+            if r.get("_was_failed"):
+                continue   # skip_failed path — status already FAILED from prior run
             if r.get("error") and not r.get("detected"):
                 err = r["error"]
                 status.mark_failed(record.pdf_stem, stage, err)
                 _append_failed(record, stage, err, output_root=output_root)
+            elif stage == STAGE_LATLONG and not r.get("detected") and not r.get("error"):
+                # Ran without error but found no coordinates — not a true success.
+                # Mark as failed(ll_no_text) so analysis can distinguish from
+                # "latlong found" and so skip_failed treats it as terminal.
+                status.mark_failed(record.pdf_stem, stage, "ll_no_text")
+                # Note: NOT added to failed_records.csv — this is expected for
+                # collections where lat/lon is absent from most forms.
             else:
                 status.mark_done(record.pdf_stem, stage, r)
 
@@ -1227,6 +1246,22 @@ def _dispatch(stage: str, manager: PDFDocumentManager,
                 tier_for(record.collection_num),
                 {"location_strategy": "str_keywords"},
             )["location_strategy"]
+
+        # Form-type override: T1_LARGE, T2_MED, T3_SMALL forms always have
+        # PRINTED SEC/TWP/RGE labels (only values may be handwritten).
+        # These forms predate the "Location:" keyword convention, so
+        # location_keyword strategy always misses — force str_keywords.
+        # Fixes 330 not_found failures where T2_MED forms in MID/LATE tier
+        # were dispatched to the wrong extractor.
+        _ftype_loc = _gres.get("form_type", "")
+        if _ftype_loc and strategy != "str_keywords":
+            from grid.form_classifier import FORM_T1_LARGE, FORM_T2_MED, FORM_T3_SMALL
+            if _ftype_loc in (FORM_T1_LARGE, FORM_T2_MED, FORM_T3_SMALL):
+                log.debug(
+                    "form_type=%s → overriding location strategy %r → str_keywords",
+                    _ftype_loc, strategy,
+                )
+                strategy = "str_keywords"
 
         if strategy == "location_keyword":
             # Primary: "Location:" single-line extractor (Collections 9+).
@@ -1654,10 +1689,6 @@ def run_pipeline(args):
         cur_year_key = (collection, year)
 
         if prev_year_key and cur_year_key != prev_year_key:
-            if getattr(args, "retry", True):
-                _retry_failed(year_group_records, stages, paths, status,
-                              total=len(records),
-                              label=f"{prev_year_key[0]} / {prev_year_key[1]}")
             year_group_records = []
 
         _before_month = _review_queue_count_by_stage(output_root)
@@ -1666,7 +1697,11 @@ def run_pipeline(args):
         month_done = month_failed = month_skipped = 0
 
         # Pre-filter resume-skips and assign stable record numbers.
-        skip_failed = not getattr(args, "retry", True)   # True when --no-retry
+        # skip_failed=True is the default for all resume runs: previously-failed
+        # stages are treated as terminal and never re-issued to the API.
+        # This is the correct single-pass behaviour; retries were removed because
+        # they burned API quota without improving results (test100 analysis).
+        skip_failed = args.resume
         work_items: list = []
         record_by_stem: dict = {}
         for record in month_recs:
@@ -1734,23 +1769,12 @@ def run_pipeline(args):
         _p(f"\n  Month complete: {month_done} done | {month_failed} failed | {month_skipped} skipped")
 
         status.force_save()
-        if getattr(args, "retry", True):
-            _retry_failed(month_recs, stages, paths, status,
-                          total=len(records),
-                          label=f"{collection} / {year} / {month}")
-
         _print_review_summary(output_root, _before_month,
                               f"{collection}/{year}/{month}")
         _totals_line(total_done, total_failed, total_skipped, len(records))
 
         year_group_records.extend(month_recs)
         prev_year_key = cur_year_key
-
-    # Final year retry
-    if year_group_records and getattr(args, "retry", True):
-        _retry_failed(year_group_records, stages, paths, status,
-                      total=len(records),
-                      label=f"{prev_year_key[0]} / {prev_year_key[1]}")
 
     _print_review_summary(output_root, _before_run, "full run")
 
@@ -1861,8 +1885,11 @@ def main():
     ap.add_argument("--stage",     choices=list(ALL_STAGES))
     ap.add_argument("--resume",    action="store_true", default=True)
     ap.add_argument("--no-resume", dest="resume", action="store_false")
+    # --no-retry is kept as a silent no-op for backward compat with run_test100.py
+    # and any AWS Batch job definitions that pass it. Retry sweeps were removed
+    # in Jun 2026 — single-pass with skip_failed=True is now the default.
     ap.add_argument("--no-retry",  dest="retry", action="store_false", default=True,
-                    help="Skip month/year retry passes (useful for test runs)")
+                    help=argparse.SUPPRESS)
     ap.add_argument("--limit",     type=int)
     ap.add_argument("--flat",      type=Path, help="Flat PDF folder (testing)")
     ap.add_argument("--pdf",       type=Path, help="Single PDF file")

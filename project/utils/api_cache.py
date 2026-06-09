@@ -116,7 +116,10 @@ class ApiResponseCache:
         try:
             p.parent.mkdir(parents=True, exist_ok=True)
             serialised = _serialize(annotations)
-            tmp = p.with_suffix(".tmp")
+            # Use .new extension: Windows Defender quarantines .tmp files
+            # immediately on creation, causing the rename to fail (same issue
+            # as processing_status.csv — fixed there in Jun 2026).
+            tmp = p.with_suffix(".new")
             tmp.write_text(
                 json.dumps(serialised, separators=(",", ":")),
                 encoding="utf-8",

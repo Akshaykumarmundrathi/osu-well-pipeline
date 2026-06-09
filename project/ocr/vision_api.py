@@ -241,13 +241,16 @@ def get_page_annotations(
         if cached is not None:
             return cached
 
-        # Secondary: detect_text_with_vision may have already OCR'd this page
-        # (key format: (page_num, "pre")).  Reuse to avoid a second Tesseract run.
-        pre_cached = manager._ocr_cache.get((page_num, "pre"))
-        if pre_cached:
-            result = (pre_cached, None)           # no PIL available from that path
-            manager._ocr_cache[page_num] = result
-            return result
+        # NOTE: we deliberately do NOT reuse the (page_num, "pre") cache set by
+        # detect_text_with_vision().  That function is called from the location
+        # stage via iter_pil_pages() which yields **1-indexed** page numbers, while
+        # get_page_annotations() uses **0-indexed** page numbers.  Reusing the
+        # pre-cache would therefore return:
+        #   • the wrong page's annotations (off-by-one physical page), AND
+        #   • pil_image=None (no PIL stored on that path)
+        # causing county extraction to silently fail on every second-page attempt.
+        # The deduplication benefit (saving one Vision API call) is not worth the
+        # correctness risk; we always re-OCR here using the correct 0-indexed page.
 
         pil_image = manager.get_page_pil(page_num)
         if pil_image is None:
@@ -255,9 +258,7 @@ def get_page_annotations(
 
         annotations = _ocr_image(pil_image)
         result      = (annotations or None), pil_image
-        manager._ocr_cache[page_num]           = result
-        # Populate the detect_text_with_vision key so location stage gets a hit.
-        manager._ocr_cache[(page_num, "pre")]  = annotations or None
+        manager._ocr_cache[page_num] = result
         return result
 
     except Exception as exc:

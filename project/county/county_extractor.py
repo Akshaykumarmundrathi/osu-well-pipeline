@@ -511,13 +511,15 @@ def _try_page(
 
     except Exception as exc:
         # GEMINI_DISABLED is an expected operational state, not a real error —
-        # log at DEBUG (no traceback) so it doesn't flood the console.
+        # log at DEBUG (no traceback) and store a short error token so it
+        # doesn't flood the console or pollute county_error_type in the CSV.
         # All other Gemini failures (quota, network, bad response) log at ERROR.
         if "GEMINI_DISABLED" in str(exc):
-            log.debug("Gemini skipped on page %d: %s", page_num + 1, exc)
+            log.debug("Gemini skipped on page %d (GEMINI_DISABLED=1)", page_num + 1)
+            result["error"] = "gemini_disabled"
         else:
             log.error("Gemini failed on page %d: %s", page_num + 1, exc, exc_info=True)
-        result["error"] = str(exc)
+            result["error"] = str(exc)
 
     # -- Fallback: accept weaker structural anchor if above min threshold --------
     # Placed OUTSIDE the try block so a Gemini RuntimeError (quota exhausted,

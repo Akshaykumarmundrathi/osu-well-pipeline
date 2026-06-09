@@ -205,11 +205,29 @@ class ProcessingStatus:
         """Read existing rows, fill missing columns from new schema with ''."""
         if not self.csv_path.exists():
             return
-        with self.csv_path.open(newline="", encoding="utf-8") as f:
+        # Guard against corrupt rows with fields > 1 MB (produced by the old
+        # multi-process race condition where two workers interleaved writes to
+        # the same .csv.new file).  Python's default limit is 128 KB; raise it
+        # so we can read past pre-existing corruption, but drop any row whose
+        # largest field exceeds 10 KB (no legitimate field is that long).
+        csv.field_size_limit(2_000_000)
+        bad_rows = 0
+        with self.csv_path.open(newline="", encoding="utf-8",
+                                 errors="replace") as f:
             for row in csv.DictReader(f):
+                if any(len(v) > 10_000 for v in row.values()):
+                    bad_rows += 1
+                    continue          # drop corrupt row — will be reprocessed
                 full = dict(_EMPTY_ROW)
                 full.update(row)
                 self._rows[full["pdf_stem"]] = full
+        if bad_rows:
+            log.warning(
+                "_load: dropped %d corrupt row(s) from %s "
+                "(fields > 10 KB — likely caused by a previous "
+                "multi-process write race; rows will be reprocessed).",
+                bad_rows, self.csv_path,
+            )
 
     def save(self):
         """

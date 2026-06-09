@@ -1707,6 +1707,33 @@ def run_pipeline(args):
     if not month_groups:
         month_groups = [(("", "", ""), records)]
 
+    # -- Pre-compute the set of stems that need at least one stage of work -----
+    # skip_failed=True on all resume runs: FAILED is treated as terminal.
+    # Build this once from the in-memory status dict (O(n), all dict lookups)
+    # so we can jump directly to months with pending records and avoid
+    # re-checking every record inside the loop.
+    skip_failed = args.resume
+
+    def _is_terminal(stem: str, stage: str) -> bool:
+        s = status.get_status(stem, stage)
+        if s in (DONE, SKIPPED):
+            return True
+        if skip_failed and s == FAILED:
+            return True
+        return False
+
+    if args.resume:
+        pending_stems: set[str] | None = {
+            r.pdf_stem for r in records
+            if not all(_is_terminal(r.pdf_stem, s) for s in stages)
+        }
+        n_pending = len(pending_stems)
+        n_terminal = len(records) - n_pending
+        _p(f"  Resume: {n_pending:,} records need work  "
+           f"({n_terminal:,} already complete — will be skipped instantly)")
+    else:
+        pending_stems = None   # --no-resume: process everything
+
     # -- Main loop -------------------------------------------------------------
     total_done = total_failed = total_skipped = 0
     record_num = 0
@@ -1724,32 +1751,34 @@ def run_pipeline(args):
         if prev_year_key and cur_year_key != prev_year_key:
             year_group_records = []
 
+        # Skip the entire month if every record in it is already terminal.
+        # This avoids printing a section header + iterating records for months
+        # that were fully processed in a prior run.
+        if pending_stems is not None:
+            month_pending = [r for r in month_recs if r.pdf_stem in pending_stems]
+            if not month_pending:
+                record_num    += len(month_recs)
+                total_skipped += len(month_recs)
+                prev_year_key  = cur_year_key
+                year_group_records.extend(month_recs)
+                continue
+        else:
+            month_pending = month_recs
+
         _before_month = _review_queue_count_by_stage(output_root)
         _section_header(collection, year, month, len(month_recs))
 
         month_done = month_failed = month_skipped = 0
 
-        # Pre-filter resume-skips and assign stable record numbers.
-        # skip_failed=True is the default for all resume runs: previously-failed
-        # stages are treated as terminal and never re-issued to the API.
-        # This is the correct single-pass behaviour; retries were removed because
-        # they burned API quota without improving results (test100 analysis).
-        skip_failed = args.resume
         work_items: list = []
         record_by_stem: dict = {}
         for record in month_recs:
             record_num += 1
-            # Fast-skip records where every stage is terminal.
-            # In normal resume mode: DONE|SKIPPED counts as terminal.
-            # In --no-retry mode:    FAILED also counts as terminal (no re-runs).
-            def _is_terminal(stem, stage):
-                s = status.get_status(stem, stage)
-                if s in (DONE, SKIPPED):
-                    return True
-                if skip_failed and s == FAILED:
-                    return True
-                return False
-            if args.resume and all(_is_terminal(record.pdf_stem, s) for s in stages):
+            # Skip records where every stage is already terminal.
+            # pending_stems already excludes these, so this is only reached
+            # for records in month_pending (all have at least one pending stage).
+            # The check is kept as a safety guard (e.g. status updated mid-loop).
+            if args.resume and record.pdf_stem not in (pending_stems or ()):
                 month_skipped += 1
                 total_skipped += 1
                 continue

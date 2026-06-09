@@ -93,6 +93,10 @@ def _tesseract_annotations(image: PILImage.Image) -> list:
 
 _vision_client = None
 _RETRY_DELAYS  = [3, 6, 15]
+# Per-call timeout in seconds.  Without this, a hung gRPC connection blocks
+# the calling process indefinitely (root cause of silent pipeline hangs with
+# multiprocessing pools).
+_VISION_TIMEOUT = float(os.environ.get("VISION_API_TIMEOUT", "30"))
 
 
 class _FakeResponse:
@@ -125,7 +129,8 @@ def _vision_call_with_retry(image_bytes: bytes):
             time.sleep(delay)
         try:
             return _get_vision_client().document_text_detection(
-                image=vision.Image(content=image_bytes)
+                image=vision.Image(content=image_bytes),
+                timeout=_VISION_TIMEOUT,
             )
         except ServiceUnavailable as exc:
             last_exc = exc

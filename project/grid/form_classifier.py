@@ -239,13 +239,16 @@ def classify_form_type(
             }
 
         # No recognised anchor phrase: T4 no-anchor variant (rare).
-        # STR may use a vertical label-over-value stacked layout.
+        # Spec shows this form uses a VERTICAL label-over-value layout at
+        # upper-right:  SEC / TWP / RGE printed as separate label lines with
+        # values directly below each.  Use VSTACK (not HGROUP) so the vertical
+        # extractor runs first rather than as a last-resort fallback.
         return {
             "form_type":          FORM_T4_NOANCHOR,
             "grid_zone":          zone,
             "str_zone":           STR_UPPER_RIGHT,
             "county_format_hint": COUNTY_ANY,
-            "str_strategy_hint":  STR_STRAT_HGROUP,
+            "str_strategy_hint":  STR_STRAT_VSTACK,
         }
 
     # ── Top-center zone ───────────────────────────────────────────────────

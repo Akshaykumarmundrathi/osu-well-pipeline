@@ -139,9 +139,17 @@ def _rate_limited_generate(model, prompt, image, cfg):
     """
     Call model.generate_content with:
     - global inter-call rate limiting (GEMINI_MIN_CALL_GAP_S)
-    - per-model exponential back-off on 429 ResourceExhausted
-    - automatic API key rotation when a key is fully exhausted
-    - up to _QUOTA_MAX_RETRIES retries per key, cycling through all keys
+    - immediate API key rotation on the FIRST 429 when multiple keys are loaded
+    - per-model exponential back-off on 429 only when all keys have been tried
+    - up to _QUOTA_MAX_RETRIES retries with back-off when on the last key
+
+    Key-rotation strategy (changed from v1):
+      v1: wait through 6 exponential back-offs (~17 min) on key 1 before
+          switching to key 2.  Very wasteful when 3 keys are available.
+      v2: on first 429, immediately rotate to the next key.  Only fall back
+          to exponential back-off once all rotation budget is spent (i.e. on
+          the last remaining key).  This cuts P99 wait from 17 min to ~0s
+          for the first two rotations.
     """
     global _last_call
 
@@ -150,10 +158,11 @@ def _rate_limited_generate(model, prompt, image, cfg):
     key_rotations  = 0
 
     while True:                          # outer loop: retry after key rotation
-        quota_exhausted = False
+        quota_exhausted  = False
+        key_just_rotated = False
 
         for attempt in range(1, _QUOTA_MAX_RETRIES + 1):
-            # Honour per-model quota backoff.
+            # Honour per-model quota backoff (only active when no keys left to rotate to).
             with _quota_lock:
                 backoff_until, _ = _quota_state.get(model_name, (0.0, 0))
             wait_quota = backoff_until - time.monotonic()
@@ -193,6 +202,28 @@ def _rate_limited_generate(model, prompt, image, cfg):
                 )
 
                 if is_quota:
+                    # ── Multi-key fast path: rotate immediately ────────────────
+                    # Don't burn time on back-off when another key is available.
+                    if len(_api_keys) > 1 and key_rotations < max_rotations:
+                        log.warning(
+                            "Gemini %s quota hit (key %d/%d) — rotating key immediately",
+                            model_name,
+                            _current_key_idx + 1, len(_api_keys),
+                        )
+                        with _key_lock:
+                            _exhausted_keys.add(_current_key_idx)
+                        if _rotate_key():
+                            key_rotations += 1
+                            _clear_quota_state(model_name)
+                            key_just_rotated = True
+                            break       # break inner → outer will retry with new key
+                        # _rotate_key() returned False — all keys somehow gone
+                        raise RuntimeError(
+                            f"All {len(_api_keys)} Gemini API key(s) exhausted "
+                            f"after {key_rotations} rotation(s)."
+                        )
+
+                    # ── Single key or all rotation budget spent: back-off ──────
                     delay = _record_quota_hit(model_name)
                     log.warning(
                         "Gemini %s quota hit (attempt %d/%d, key %d/%d) — backoff %.0fs: %s",
@@ -202,7 +233,7 @@ def _rate_limited_generate(model, prompt, image, cfg):
                     )
                     if attempt == _QUOTA_MAX_RETRIES:
                         quota_exhausted = True
-                        break          # break inner loop → try key rotation
+                        break          # break inner loop → try key rotation below
                     continue           # sleep handled at top of next iteration
 
                 if is_server and attempt < _QUOTA_MAX_RETRIES:
@@ -216,8 +247,12 @@ def _rate_limited_generate(model, prompt, image, cfg):
 
                 raise   # non-retryable (bad request, auth, etc.)
 
+        # ── After inner loop: decide how to continue ───────────────────────────
+        if key_just_rotated:
+            continue   # outer loop: retry from scratch with new key
+
         if quota_exhausted:
-            # Mark this key as spent and try to rotate.
+            # Mark this key as spent and try to rotate if budget remains.
             with _key_lock:
                 _exhausted_keys.add(_current_key_idx)
             if key_rotations < max_rotations and _rotate_key():
@@ -234,7 +269,7 @@ def _rate_limited_generate(model, prompt, image, cfg):
                 "Add more keys to GOOGLE_API_KEY (comma-separated) or upgrade to a "
                 "paid Gemini plan."
             )
-        break   # should not be reached — all paths return, raise, or continue
+        break   # normal exit (return inside try is the only real path here)
 
 
 def setup_gemini():

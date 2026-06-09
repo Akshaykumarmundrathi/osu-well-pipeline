@@ -488,27 +488,46 @@ def _print_status(index_path: Path, main_status_csv: Path) -> None:
         print("  processing_status.csv not found — run not started yet.", flush=True)
         return
 
+    # Separate "in status CSV" from "not yet started".
+    # A record that is in the CSV but has an empty / None / "pending" status value
+    # counts as "not yet started" the same as a record that's not in the CSV at all.
+    # This prevents the confusing display where pending=0 even though 3600+ records
+    # haven't been touched yet.
+    _ACTIVE = {"done", "failed", "skipped"}
     counts: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
-    n_in_index = 0
+    n_in_status = 0
+    started_stems: set[str] = set()
     with main_status_csv.open(newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
-            if row.get("pdf_stem", "") not in index_stems:
+            stem = row.get("pdf_stem", "")
+            if stem not in index_stems:
                 continue
-            n_in_index += 1
+            n_in_status += 1
+            any_started = False
             for stage in ("latlong", "grid", "location", "county", "dot"):
-                st = row.get(f"{stage}_status", "pending") or "pending"
-                counts[stage][st] += 1
+                st = (row.get(f"{stage}_status") or "").strip()
+                if st in _ACTIVE:
+                    counts[stage][st] += 1
+                    any_started = True
+            if any_started:
+                started_stems.add(stem)
 
-    print(f"  Rows in status CSV matching this index: {n_in_index:,}", flush=True)
+    n_started   = len(started_stems)
+    n_not_start = len(index_stems) - n_started
+    print(f"  Processed: {n_started:,} / {len(index_stems):,}  "
+          f"({n_not_start:,} not yet started)", flush=True)
     print(f"\n  {'Stage':<10} {'done':>8} {'failed':>8} "
           f"{'skipped':>8} {'pending':>8}", flush=True)
     print(f"  {'-'*46}", flush=True)
     for stage in ("latlong", "grid", "location", "county", "dot"):
         c = counts[stage]
-        total = sum(c.values())
-        pending = len(index_stems) - total
-        print(f"  {stage:<10} {c.get('done',0):>8,} {c.get('failed',0):>8,} "
-              f"{c.get('skipped',0):>8,} {pending:>8,}", flush=True)
+        stage_done    = c.get("done", 0)
+        stage_failed  = c.get("failed", 0)
+        stage_skipped = c.get("skipped", 0)
+        stage_total   = stage_done + stage_failed + stage_skipped
+        stage_pending = len(index_stems) - stage_total
+        print(f"  {stage:<10} {stage_done:>8,} {stage_failed:>8,} "
+              f"{stage_skipped:>8,} {stage_pending:>8,}", flush=True)
 
 
 # ---------------------------------------------------------------------------

@@ -102,6 +102,10 @@ def _classify_error(error: str) -> str:
     # Named sentinel strings returned directly as error values
     if "keyword_not_found" in e:
         return "keyword_not_found"
+    # gemini_disabled: Gemini was bypassed (GEMINI_DISABLED=1) and Vision OCR
+    # alone could not identify the county — outcome is the same as no_match.
+    if "gemini_disabled" in e or "gemini disabled" in e:
+        return "no_match"
     if "no_match" in e:
         return "no_match"
     if "not_detected" in e or "no grid" in e or "no_dot_found" in e:

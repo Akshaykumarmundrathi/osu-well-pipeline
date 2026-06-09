@@ -452,72 +452,74 @@ def _try_page(
     # If structural anchor produced a weaker (but plausible) match, remember it.
     anchor_name, anchor_score = name, score
 
-    try:
-        flash, pro, cfg = _get_gemini()
+    # When Gemini is disabled, skip the Gemini block entirely — no RuntimeError,
+    # just set the sentinel and fall through to the anchor_weak fallback below.
+    _gemini_disabled = os.environ.get("GEMINI_DISABLED", "0").strip() == "1"
+    if _gemini_disabled:
+        log.debug("Gemini disabled (GEMINI_DISABLED=1) — skipping Gemini on page %d",
+                  page_num + 1)
+        result["error"] = "gemini_disabled"
+    else:
+        try:
+            flash, pro, cfg = _get_gemini()
 
-        if full_page_gemini:
-            # Skip Flash, send the whole page directly to Pro.
-            raw2 = _gemini_call(pro, cfg, prompt_pass2, pil_image)
-            result["pass2_result"] = raw2
-            if raw2.lower() != "not detected.":
-                # Use enhanced parser for Pro: handles "Creek County" inside
-                # verbose responses (ported from parse_county_response_fuzzy_v2).
-                n2, s2 = _parse_county_full_response(raw2)
-                if n2 and s2 >= FUZZY_MATCH_THRESHOLD:
-                    result.update(detected=True, name=n2,
-                                  fuzzy_score=s2, confidence=s2,
-                                  method="full_page_pro")
-                    return result, True
-        else:
-            # -- Pass 1 (Flash) on the crop ----------------------------------
-            # Flash prompt asks for base name only → use base-name fuzzy match.
-            raw1 = _gemini_call(flash, cfg, prompt_pass1, crop)
-            result["pass1_result"] = raw1
-            p1_not_found = raw1.lower().strip() in ("not detected.", "not detected", "")
-            if not p1_not_found:
-                n1, s1 = _fuzzy_match(raw1)
-                if n1 and s1 >= RETRY_CONFIDENCE_THRESHOLD:
-                    log.info("County (P1) = %r  score=%d", n1, s1)
-                    result.update(detected=True, name=n1,
-                                  fuzzy_score=s1, confidence=s1,
-                                  method="flash")
-                    return result, True
+            if full_page_gemini:
+                # Skip Flash, send the whole page directly to Pro.
+                raw2 = _gemini_call(pro, cfg, prompt_pass2, pil_image)
+                result["pass2_result"] = raw2
+                if raw2.lower() != "not detected.":
+                    # Use enhanced parser for Pro: handles "Creek County" inside
+                    # verbose responses (ported from parse_county_response_fuzzy_v2).
+                    n2, s2 = _parse_county_full_response(raw2)
+                    if n2 and s2 >= FUZZY_MATCH_THRESHOLD:
+                        result.update(detected=True, name=n2,
+                                      fuzzy_score=s2, confidence=s2,
+                                      method="full_page_pro")
+                        return result, True
+            else:
+                # -- Pass 1 (Flash) on the crop ----------------------------------
+                # Flash prompt asks for base name only → use base-name fuzzy match.
+                raw1 = _gemini_call(flash, cfg, prompt_pass1, crop)
+                result["pass1_result"] = raw1
+                p1_not_found = raw1.lower().strip() in ("not detected.", "not detected", "")
+                if not p1_not_found:
+                    n1, s1 = _fuzzy_match(raw1)
+                    if n1 and s1 >= RETRY_CONFIDENCE_THRESHOLD:
+                        log.info("County (P1) = %r  score=%d", n1, s1)
+                        result.update(detected=True, name=n1,
+                                      fuzzy_score=s1, confidence=s1,
+                                      method="flash")
+                        return result, True
 
-            # -- Pass 2 (Pro) on the crop ------------------------------------
-            # Always try Pro when Flash fails — Pro uses the richer full-name
-            # prompt and the enhanced word-boundary parser, which handles
-            # handwritten county names that Flash's base-name prompt misses.
-            #
-            # Previous logic skipped Pro when both Flash AND the structural
-            # anchor failed ("skip_pass2 = p1_not_found and not anchor_name").
-            # That caused ~8% county failures (327/4054) in test100 because
-            # T2_MED handwritten forms have no OCR anchor and Flash fails
-            # to read cursive → Pro was never called.  Fix: always run Pro.
-            raw2 = _gemini_call(pro, cfg, prompt_pass2, crop)
-            result["pass2_result"] = raw2
-            if raw2.lower().strip() not in ("not detected.", "not detected", ""):
-                # Pro prompt asks for full name → use enhanced parser with
-                # word-boundary containment check (handles verbose responses).
-                n2, s2 = _parse_county_full_response(raw2)
-                if n2 and s2 >= FUZZY_MATCH_THRESHOLD:
-                    log.info("County (P2) = %r  score=%d", n2, s2)
-                    result.update(detected=True, name=n2,
-                                  fuzzy_score=s2, confidence=s2,
-                                  method="pro")
-                    return result, True
+                # -- Pass 2 (Pro) on the crop ------------------------------------
+                # Always try Pro when Flash fails — Pro uses the richer full-name
+                # prompt and the enhanced word-boundary parser, which handles
+                # handwritten county names that Flash's base-name prompt misses.
+                #
+                # Previous logic skipped Pro when both Flash AND the structural
+                # anchor failed ("skip_pass2 = p1_not_found and not anchor_name").
+                # That caused ~8% county failures (327/4054) in test100 because
+                # T2_MED handwritten forms have no OCR anchor and Flash fails
+                # to read cursive → Pro was never called.  Fix: always run Pro.
+                raw2 = _gemini_call(pro, cfg, prompt_pass2, crop)
+                result["pass2_result"] = raw2
+                if raw2.lower().strip() not in ("not detected.", "not detected", ""):
+                    # Pro prompt asks for full name → use enhanced parser with
+                    # word-boundary containment check (handles verbose responses).
+                    n2, s2 = _parse_county_full_response(raw2)
+                    if n2 and s2 >= FUZZY_MATCH_THRESHOLD:
+                        log.info("County (P2) = %r  score=%d", n2, s2)
+                        result.update(detected=True, name=n2,
+                                      fuzzy_score=s2, confidence=s2,
+                                      method="pro")
+                        return result, True
 
-        log.warning("County not matched on page %d", page_num + 1)
-        result["error"] = "no_match"
+            log.warning("County not matched on page %d", page_num + 1)
+            result["error"] = "no_match"
 
-    except Exception as exc:
-        # GEMINI_DISABLED is an expected operational state, not a real error —
-        # log at DEBUG (no traceback) and store a short error token so it
-        # doesn't flood the console or pollute county_error_type in the CSV.
-        # All other Gemini failures (quota, network, bad response) log at ERROR.
-        if "GEMINI_DISABLED" in str(exc):
-            log.debug("Gemini skipped on page %d (GEMINI_DISABLED=1)", page_num + 1)
-            result["error"] = "gemini_disabled"
-        else:
+        except Exception as exc:
+            # All Gemini failures: quota, network, bad response — log at ERROR.
+            # GEMINI_DISABLED path is now handled above and never reaches here.
             log.error("Gemini failed on page %d: %s", page_num + 1, exc, exc_info=True)
             result["error"] = str(exc)
 

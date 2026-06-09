@@ -659,20 +659,40 @@ def process_single_location(
             # When OCR regex + per-keyword both failed to yield ≥2 fields,
             # send the binarized crop to Gemini Flash — same approach the
             # original monolithic pipeline used before the modular rewrite.
-            # Only fires when a crop was found (Strategy 1 produced a bbox)
-            # and GOOGLE_API_KEY is configured.
-            if found < 2 and crop_box is not None:
-                g_sec, g_twp, g_rng = _gemini_str_from_crop(
-                    pil_image.crop(crop_box), log,
-                )
-                sec = sec or g_sec
-                twp = twp or g_twp
-                rng = rng or g_rng
-                found = sum(bool(v) for v in (sec, twp, rng))
-                if found > 0 and raw_text == "":
-                    raw_text = f"gemini: sec={sec} twp={twp} rng={rng}"
-                if not strat_used and found > 0:
-                    strat_used = "gemini"
+            #
+            # Two sub-cases:
+            #   3a. Strategy 1 found a keyword group → use that crop bbox.
+            #   3b. No keyword group (T2_MED handwritten forms where OCR
+            #       finds zero tokens) → fall back to the zone-filter region
+            #       (right of grid / upper-right quadrant).  This is the
+            #       critical path for the ~277 T2_MED not_found failures:
+            #       OCR sees nothing, but Gemini can read the handwriting
+            #       directly from the expected STR region.
+            if found < 2:
+                _gemini_crop_box = crop_box   # may be None
+                if _gemini_crop_box is None and zone_region is not None:
+                    # Use the zone region as the Gemini crop (clamped to page).
+                    zx0, zy0, zx1, zy1 = zone_region
+                    _gemini_crop_box = (
+                        max(0, zx0), max(0, zy0),
+                        min(pw, zx1), min(ph, zy1),
+                    )
+                    if _gemini_crop_box[2] <= _gemini_crop_box[0] or \
+                       _gemini_crop_box[3] <= _gemini_crop_box[1]:
+                        _gemini_crop_box = None
+
+                if _gemini_crop_box is not None:
+                    g_sec, g_twp, g_rng = _gemini_str_from_crop(
+                        pil_image.crop(_gemini_crop_box), log,
+                    )
+                    sec = sec or g_sec
+                    twp = twp or g_twp
+                    rng = rng or g_rng
+                    found = sum(bool(v) for v in (sec, twp, rng))
+                    if found > 0 and raw_text == "":
+                        raw_text = f"gemini: sec={sec} twp={twp} rng={rng}"
+                    if not strat_used and found > 0:
+                        strat_used = "gemini_zone" if crop_box is None else "gemini"
 
             # -- Strategy 4 LATE: vertical label-over-value (normal order) -----
             # For non-LATE form types, try vertical extraction as a last resort

@@ -396,11 +396,34 @@ def _try_page(
         }, True
 
     # -- Strategy 2/3: Gemini on crop or full page ---------------------------
+    from grid.form_classifier import COUNTY_STACKED, COUNTY_COLON_AFTER
     pw, ph = pil_image.size
     x0, y0, x1, y1 = kw_box
-    left_pad   = int(EXTEND_LEFT_PIXELS      * crop_scale)
-    right_pad  = int(EXTEND_RIGHT_PIXELS     * crop_scale)
-    vert_pad   = int(VERTICAL_PADDING_PIXELS * crop_scale)
+    # Form-type-aware padding.
+    # COUNTY_STACKED (Collection 11+): county value is BELOW the keyword so
+    #   increase vertical padding and reduce horizontal noise.
+    # COUNTY_COLON_AFTER: value is to the RIGHT, clamp left extension.
+    # Default (COUNTY_NAME_THEN_WORD / "any"): value LEFT of keyword — use
+    #   standard left-heavy crop; cap at 50% of page width to avoid including
+    #   the grid image on T2_MED landscape forms.
+    _base_left  = EXTEND_LEFT_PIXELS
+    _base_right = EXTEND_RIGHT_PIXELS
+    _base_vert  = VERTICAL_PADDING_PIXELS
+    if county_format_hint == COUNTY_STACKED:
+        _base_vert  = 120   # extend well below to capture the stacked value
+        _base_left  = 200   # no need for wide left on stacked layout
+        _base_right = 200
+    elif county_format_hint == COUNTY_COLON_AFTER:
+        _base_left  = 100   # value is to the right, narrow left side
+        _base_right = 600
+    else:
+        # name_county or any: value is left of "County" — cap left pad so we
+        # don't bleed into the grid on T2_MED landscape forms (page ~3200px wide).
+        _base_left = min(_base_left, int(pw * 0.45))
+
+    left_pad  = int(_base_left  * crop_scale)
+    right_pad = int(_base_right * crop_scale)
+    vert_pad  = int(_base_vert  * crop_scale)
     crop_box = (
         max(0,  int(x0 - left_pad)),
         max(0,  int(y0 - vert_pad)),
@@ -461,26 +484,27 @@ def _try_page(
                     return result, True
 
             # -- Pass 2 (Pro) on the crop ------------------------------------
-            # Skip if: (a) Flash already said "not detected" AND there is no
-            # weak structural-anchor candidate.  Flash sees the same image; if
-            # it found nothing, Pro is very unlikely to do better and costs more.
-            skip_pass2 = p1_not_found and not anchor_name
-            if not skip_pass2:
-                raw2 = _gemini_call(pro, cfg, prompt_pass2, crop)
-                result["pass2_result"] = raw2
-                if raw2.lower().strip() not in ("not detected.", "not detected", ""):
-                    # Pro prompt asks for full name → use enhanced parser with
-                    # word-boundary containment check (handles verbose responses).
-                    n2, s2 = _parse_county_full_response(raw2)
-                    if n2 and s2 >= FUZZY_MATCH_THRESHOLD:
-                        log.info("County (P2) = %r  score=%d", n2, s2)
-                        result.update(detected=True, name=n2,
-                                      fuzzy_score=s2, confidence=s2,
-                                      method="pro")
-                        return result, True
-            else:
-                log.debug("County: skipping Pass 2 — Flash returned 'not detected' "
-                          "and no structural anchor candidate")
+            # Always try Pro when Flash fails — Pro uses the richer full-name
+            # prompt and the enhanced word-boundary parser, which handles
+            # handwritten county names that Flash's base-name prompt misses.
+            #
+            # Previous logic skipped Pro when both Flash AND the structural
+            # anchor failed ("skip_pass2 = p1_not_found and not anchor_name").
+            # That caused ~8% county failures (327/4054) in test100 because
+            # T2_MED handwritten forms have no OCR anchor and Flash fails
+            # to read cursive → Pro was never called.  Fix: always run Pro.
+            raw2 = _gemini_call(pro, cfg, prompt_pass2, crop)
+            result["pass2_result"] = raw2
+            if raw2.lower().strip() not in ("not detected.", "not detected", ""):
+                # Pro prompt asks for full name → use enhanced parser with
+                # word-boundary containment check (handles verbose responses).
+                n2, s2 = _parse_county_full_response(raw2)
+                if n2 and s2 >= FUZZY_MATCH_THRESHOLD:
+                    log.info("County (P2) = %r  score=%d", n2, s2)
+                    result.update(detected=True, name=n2,
+                                  fuzzy_score=s2, confidence=s2,
+                                  method="pro")
+                    return result, True
 
         # -- Fallback: accept weaker structural anchor if above min threshold ----
         if anchor_name and anchor_score >= FUZZY_MATCH_THRESHOLD:
@@ -540,6 +564,30 @@ def process_single_county(
             county_format_hint=county_format_hint,
         )
         if found_keyword:
+            # Keyword found on this page — inline escalation for no_match.
+            # When the crop-level approach fails (both anchor and Gemini crop
+            # return nothing), automatically send the FULL PAGE to Pro.  This
+            # catches handwritten county names that Gemini can't read from a
+            # narrow keyword crop but can identify from the full form context.
+            #
+            # Only escalate when:
+            #   (a) crop-level result is no_match (not already in full-page mode)
+            #   (b) not already called with full_page_gemini=True (avoid loop)
+            if (r is not None
+                    and not r.get("detected")
+                    and r.get("error") in ("no_match", "invalid_crop", None, "")
+                    and not full_page_gemini):
+                log.info("County: crop-level no_match on page %d — escalating to full-page Pro",
+                         page_num + 1)
+                r2, _ = _try_page(
+                    manager, page_num, output_dir, pdf_stem, log,
+                    crop_scale=1.0, full_page_gemini=True,
+                    county_format_hint=county_format_hint,
+                )
+                if r2 is not None and r2.get("detected"):
+                    return r2
+                # Full-page also failed — return original crop result so the
+                # caller sees the partial pass1/pass2 evidence for debugging.
             return r
 
     log.warning("County keyword not found on first %d page(s)", cap)

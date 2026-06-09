@@ -50,14 +50,36 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Base threshold from evolutionary advisor (written by utils.evolutionary).
 # Falls back to per-tier hardcoded defaults.
+#
+# Calibration notes (2026-06-09, test100 analysis — 1,300 records):
+#
+#   EARLY / TRANSITION (C1-C8): 80-95% dot detection success.
+#     Dots are bold, high-contrast ink circles on coarse paper.  U-Net is
+#     well-calibrated here.  Threshold 0.50-0.55 works.
+#
+#   MID (C9-C10): 25-50% success.  The U-Net doesn't generalise as well
+#     to the smaller, centred MID-era grid layout.  Lowered to 0.35 as a
+#     best-effort — detected dots at this threshold should be flagged for
+#     manual review (DOT_REVIEW_BELOW in config).
+#
+#   LATE (C11-C12): 9-13% success with old thresholds.  LATE forms use a
+#     top-right grid with a different aspect ratio; the model was trained
+#     predominantly on EARLY forms.  Lowered to 0.28 — any detections at
+#     this sensitivity MUST be manually reviewed.  Full model retraining
+#     on C11-C12 grids is the proper long-term fix.
+#
+#   MODERN (C13): 30% success.  Digital forms, dot is a small filled
+#     circle or check-mark.  Lowered to 0.26.
+#
+# Override all tiers via UNET_THRESHOLD env var (single float 0-1).
 _TIER_THRESHOLD = {
-    "early":      0.55,   # coarser/bolder dots — raise threshold
-    "transition": 0.52,
-    "mid":        0.50,
-    "late":       0.47,
-    "modern":     0.45,   # sometimes faint — lower threshold
+    "early":      0.52,   # coarser/bolder dots — keep slightly elevated
+    "transition": 0.48,
+    "mid":        0.35,   # lowered: U-Net under-activates on MID grids
+    "late":       0.28,   # lowered: high false-negative rate on C11-C12
+    "modern":     0.26,   # lowered: digital forms, small dot symbols
 }
-_DEFAULT_THRESHOLD = 0.50
+_DEFAULT_THRESHOLD = 0.40
 
 
 def _load_evolved_threshold(output_root: Path | None) -> float | None:
@@ -82,7 +104,22 @@ def _load_evolved_threshold(output_root: Path | None) -> float | None:
 
 
 def _threshold_for_tier(tier: str, output_root: Path | None = None) -> float:
-    """Return inference threshold for this tier, with evolutionary override."""
+    """
+    Return inference threshold for this tier.
+
+    Priority:
+      1. UNET_THRESHOLD env var (single float) — overrides all tiers.
+      2. parameter_suggestions.json from evolutionary advisor.
+      3. Per-tier hardcoded defaults above.
+    """
+    # Env-var global override (useful for threshold experiments)
+    env_thresh = os.environ.get("UNET_THRESHOLD", "").strip()
+    if env_thresh:
+        try:
+            return float(env_thresh)
+        except ValueError:
+            log.warning("UNET_THRESHOLD=%r is not a valid float — ignored", env_thresh)
+
     evolved = _load_evolved_threshold(output_root)
     if evolved is not None:
         return evolved

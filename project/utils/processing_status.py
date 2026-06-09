@@ -24,12 +24,16 @@ Call force_save() at month/year boundaries and on process exit.
 """
 
 import csv
+import logging
+import os
 import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 from config import ALL_STAGES
+
+log = logging.getLogger(__name__)
 
 PENDING = "pending"
 DONE    = "done"
@@ -115,13 +119,79 @@ def _classify_error(error: str) -> str:
     return "exception"
 
 
+# ---------------------------------------------------------------------------
+# Cross-process advisory lock — used by _save_locked so that multiprocessing
+# workers don't simultaneously overwrite processing_status.csv.
+#
+# Uses os.O_CREAT | os.O_EXCL which is atomic on NTFS and POSIX.
+# Stale locks (from crashed workers) are detected via PID liveness check and
+# automatically stolen so a single crash never wedges the whole run.
+# ---------------------------------------------------------------------------
+
+def _proc_lock_acquire(lock_path: Path, timeout: float = 30.0) -> bool:
+    """
+    Exclusively create `lock_path` as a cross-process advisory lock.
+
+    Returns True when the lock is held; False if `timeout` seconds elapse
+    without acquiring it.  Stale locks from dead PIDs are stolen automatically.
+    """
+    deadline = time.monotonic() + timeout
+    delay    = 0.05   # start at 50 ms, double each retry up to 500 ms cap
+    while time.monotonic() < deadline:
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            try:
+                os.write(fd, f"{os.getpid()}\n".encode())
+            finally:
+                os.close(fd)
+            return True
+        except FileExistsError:
+            # Check whether the lock-holding PID is still alive.
+            try:
+                pid = int(lock_path.read_text().strip())
+                if pid != os.getpid():
+                    try:
+                        os.kill(pid, 0)   # signal 0 = liveness probe only
+                    except ProcessLookupError:
+                        # Lock-holder is dead — steal the lock.
+                        try:
+                            lock_path.unlink(missing_ok=True)
+                            log.warning(
+                                "Stole stale processing_status lock from dead PID %d", pid
+                            )
+                        except Exception:
+                            pass
+                        continue   # retry O_EXCL open immediately
+                    except PermissionError:
+                        pass       # PID exists — wait normally
+            except Exception:
+                pass               # unreadable lock file — wait and retry
+            time.sleep(min(delay, 0.5))
+            delay = min(delay * 2, 0.5)
+        except OSError:
+            time.sleep(0.1)
+    return False
+
+
+def _proc_lock_release(lock_path: Path):
+    """Release the cross-process advisory lock."""
+    try:
+        lock_path.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
 class ProcessingStatus:
     """In-memory mirror of processing_status.csv with batched writes."""
 
     def __init__(self, csv_path: Path):
         """Load existing CSV (if any) into self._rows keyed by pdf_stem."""
-        self.csv_path = csv_path
+        self.csv_path  = csv_path
+        self._lock_path = csv_path.with_suffix(".csv.lock")
         self._rows: dict[str, dict] = {}
+        # Track which stems *this process* has modified — used by _save_locked
+        # to merge-write safely when multiple worker processes share the file.
+        self._dirty: set[str] = set()
         self._pending = 0
         # RLock so that force_save() → save() and _update() → _save_locked()
         # can re-enter without deadlock, and concurrent workers don't corrupt
@@ -156,56 +226,97 @@ class ProcessingStatus:
         Write CSV to a sibling .new file then rename — MUST be called with
         self._lock held.
 
+        Multi-process safety (read-merge-write):
+          1. Acquire cross-process advisory lock (_lock_path sentinel file).
+          2. Re-read the current on-disk CSV.
+          3. Overlay *only* the rows this process has modified (_dirty set).
+             Rows modified by other workers since our last save are preserved.
+          4. Write merged state to .new, rename atomically.
+          5. Release the advisory lock.
+
         Uses .new (not .tmp) extension: Windows Defender quarantines large
         .tmp files immediately after creation, causing the rename to fail.
-
-        Write-then-rename is atomic on Windows/POSIX. Ctrl-C during the write
-        is deferred until after the rename so the on-disk file is never
-        half-written.
         """
         self.csv_path.parent.mkdir(parents=True, exist_ok=True)
-        # NOTE: Do NOT use ".tmp" extension — Windows Defender/CFA quarantines
-        # large .tmp files immediately after creation, causing the rename to fail.
-        # Use ".new" instead (plain text, no special-case treatment by AV).
         tmp = self.csv_path.with_suffix(self.csv_path.suffix + ".new")
-        pending_interrupt = None
-        try:
-            with tmp.open("w", newline="", encoding="utf-8") as f:
-                writer = csv.DictWriter(f, fieldnames=_FIELDNAMES,
-                                        extrasaction="ignore")
-                writer.writeheader()
-                writer.writerows(self._rows.values())
-        except KeyboardInterrupt as exc:
-            # Finish writing before re-raising.
-            pending_interrupt = exc
-        except Exception as exc:
-            # Any other write-side failure: log it and re-raise so the caller
-            # gets a clear traceback rather than a confusing FileNotFoundError
-            # from the rename step (tmp may not exist if open() itself failed).
-            import logging as _logging
-            _logging.getLogger(__name__).error(
-                "_save_locked write FAILED (%s: %s); tmp=%s exists=%s",
-                type(exc).__name__, exc, tmp, tmp.exists()
+
+        # --- Acquire cross-process lock ---------------------------------------
+        if not _proc_lock_acquire(self._lock_path):
+            log.error(
+                "_save_locked: could not acquire cross-process lock %s "
+                "within 30 s — skipping this save cycle (data not lost: "
+                "will retry on next SAVE_INTERVAL flush or force_save).",
+                self._lock_path,
             )
-            raise
-        # On Windows another process (e.g. Excel) may hold a read lock on the
-        # CSV briefly. Retry the atomic rename for up to ~5 seconds before
-        # giving up — long enough to outlast transient locks without hanging.
-        for attempt in range(10):
+            return
+
+        try:
+            # --- Re-read on-disk state so other workers' recent saves are kept.
+            # merged starts as the full disk state; we then overlay only the rows
+            # *this* process has modified.  Rows we never touched stay as-is.
+            merged: dict[str, dict] = {}
+            if self.csv_path.exists():
+                try:
+                    with self.csv_path.open(newline="", encoding="utf-8") as f:
+                        for row in csv.DictReader(f):
+                            full = dict(_EMPTY_ROW)
+                            full.update(row)
+                            merged[full["pdf_stem"]] = full
+                except Exception as exc:
+                    log.warning(
+                        "_save_locked: re-read of disk CSV failed (%s) — "
+                        "writing in-memory state only (some cross-worker "
+                        "updates may be lost this cycle).", exc
+                    )
+                    merged = {}
+
+            # Overlay this process's dirty rows onto the merged disk state.
+            for stem in self._dirty:
+                if stem in self._rows:
+                    merged[stem] = self._rows[stem]
+
+            # Sync our in-memory state to the merged view so future saves
+            # start from a coherent baseline.
+            self._rows = merged
+
+            # --- Write merged state ------------------------------------------
+            pending_interrupt = None
             try:
-                tmp.replace(self.csv_path)
-                break
-            except (PermissionError, FileNotFoundError) as exc:
-                if attempt == 9:
-                    raise
-                import logging as _logging
-                _logging.getLogger(__name__).warning(
-                    "_save_locked rename attempt %d failed (%s): tmp=%s exists=%s",
-                    attempt, exc, tmp, tmp.exists()
+                with tmp.open("w", newline="", encoding="utf-8") as f:
+                    writer = csv.DictWriter(f, fieldnames=_FIELDNAMES,
+                                            extrasaction="ignore")
+                    writer.writeheader()
+                    writer.writerows(merged.values())
+            except KeyboardInterrupt as exc:
+                pending_interrupt = exc
+            except Exception as exc:
+                log.error(
+                    "_save_locked write FAILED (%s: %s); tmp=%s exists=%s",
+                    type(exc).__name__, exc, tmp, tmp.exists()
                 )
-                time.sleep(0.5)
-        if pending_interrupt is not None:
-            raise pending_interrupt
+                raise
+
+            # On Windows another process (e.g. Excel) may hold a read lock on
+            # the CSV briefly. Retry the atomic rename for up to ~5 seconds.
+            for attempt in range(10):
+                try:
+                    tmp.replace(self.csv_path)
+                    break
+                except (PermissionError, FileNotFoundError) as exc:
+                    if attempt == 9:
+                        raise
+                    log.warning(
+                        "_save_locked rename attempt %d failed (%s): "
+                        "tmp=%s exists=%s",
+                        attempt, exc, tmp, tmp.exists()
+                    )
+                    time.sleep(0.5)
+
+            if pending_interrupt is not None:
+                raise pending_interrupt
+
+        finally:
+            _proc_lock_release(self._lock_path)
 
     def force_save(self):
         """Flush pending updates to disk; call at boundaries and process exit."""
@@ -248,6 +359,7 @@ class ProcessingStatus:
             "last_updated":    _now(),
         })
         self._rows[pdf_stem] = row
+        self._dirty.add(pdf_stem)
 
     def mark_done(self, pdf_stem: str, stage: str, result: dict):
         """
@@ -404,6 +516,7 @@ class ProcessingStatus:
             if extra:
                 row.update(extra)
             row["last_updated"] = _now()
+            self._dirty.add(pdf_stem)   # mark as modified by this process
 
             self._pending += 1
             if self._pending >= SAVE_INTERVAL:

@@ -510,7 +510,13 @@ def _try_page(
         result["error"] = "no_match"
 
     except Exception as exc:
-        log.error("Gemini failed on page %d: %s", page_num + 1, exc, exc_info=True)
+        # GEMINI_DISABLED is an expected operational state, not a real error —
+        # log at DEBUG (no traceback) so it doesn't flood the console.
+        # All other Gemini failures (quota, network, bad response) log at ERROR.
+        if "GEMINI_DISABLED" in str(exc):
+            log.debug("Gemini skipped on page %d: %s", page_num + 1, exc)
+        else:
+            log.error("Gemini failed on page %d: %s", page_num + 1, exc, exc_info=True)
         result["error"] = str(exc)
 
     # -- Fallback: accept weaker structural anchor if above min threshold --------

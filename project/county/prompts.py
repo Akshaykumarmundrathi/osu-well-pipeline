@@ -312,14 +312,23 @@ def setup_gemini():
 
     raw_key = os.environ.get("GOOGLE_API_KEY", "")
     _api_keys = [k.strip() for k in raw_key.split(",") if k.strip()]
-    _current_key_idx   = 0
     _exhausted_keys    = set()
     _key_rotation_count = 0
 
     if _api_keys:
-        genai.configure(api_key=_api_keys[0])
+        # PID-based starting key: distribute parallel workers across different
+        # keys so they don't all pound key-0 simultaneously on startup.
+        # With N workers spawned in quick succession, adjacent PIDs % len(keys)
+        # gives each worker a distinct starting slot → no thundering-herd RPM
+        # violations when all workers make their first Gemini call at once.
+        _current_key_idx = os.getpid() % len(_api_keys)
+        genai.configure(api_key=_api_keys[_current_key_idx])
         if len(_api_keys) > 1:
-            log.info("Gemini: %d API keys loaded — key rotation enabled", len(_api_keys))
+            log.info(
+                "Gemini: %d API keys loaded — key rotation enabled "
+                "(this worker starts at key %d via PID=%d)",
+                len(_api_keys), _current_key_idx + 1, os.getpid(),
+            )
         else:
             log.info("Gemini: 1 API key loaded (add more as GOOGLE_API_KEY=k1,k2 for rotation)")
     else:

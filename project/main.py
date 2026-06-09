@@ -1217,8 +1217,12 @@ def _dispatch(stage: str, manager: PDFDocumentManager,
         # Anchor phrases ("Spot Well Correctly", "Locate Well", etc.) are PRINTED
         # text present across all collection tiers (confirmed Jun 2025 inspection).
         # Always attempt the anchor pass; falls through to full-page CV if not found.
+        # Pass collection_num so the extractor can apply tier-appropriate AR bounds
+        # (prevents landscape data-tables on C11-C12 forms from being falsely
+        # accepted as PLSS grids — they are portrait, AR ≈ 0.55–0.90 for LATE tier).
+        _cnum = record.collection_num if record is not None else None
         return process_single_grid(manager, out_dir, pdf_stem, log,
-                                   skip_anchor=False)
+                                   skip_anchor=False, collection_num=_cnum)
 
     # -- Extract ALL form-type hints from grid result (may be None/empty) -----
     _gres               = grid_result if isinstance(grid_result, dict) else {}
@@ -1331,7 +1335,8 @@ _RETRIED: set[str] = set()           # stems already retried this run
 
 def _retry_one_stage(stage: str, error_type: str, manager, out_dir: Path,
                      pdf_stem: str, pdf_log, skip_anchor: bool = False,
-                     grid_result: dict | None = None):
+                     grid_result: dict | None = None,
+                     collection_num: int | None = None):
     """
     Re-run a single failed stage with a strategy chosen from `error_type`.
     Returns the new result dict (or None when no strategy applies).
@@ -1410,7 +1415,7 @@ def _retry_one_stage(stage: str, error_type: str, manager, out_dir: Path,
         from grid.scoring import process_single_grid
         return process_single_grid(
             manager, out_dir, pdf_stem, pdf_log, relaxed=True,
-            skip_anchor=skip_anchor,
+            skip_anchor=skip_anchor, collection_num=collection_num,
         )
 
     if stage == STAGE_LATLONG:
@@ -1485,7 +1490,8 @@ def _retry_record(record: DatasetRecord, stages: tuple,
             r = _retry_one_stage(stage, et, manager,
                                  stage_dirs[stage], record.pdf_stem, pdf_log,
                                  skip_anchor=_skip_anchor,
-                                 grid_result=_grid_retry_hints)
+                                 grid_result=_grid_retry_hints,
+                                 collection_num=record.collection_num)
         except Exception as exc:
             pdf_log.error("[retry][%s] unhandled: %s", stage, exc, exc_info=True)
             r = {"detected": False, "error": str(exc)}

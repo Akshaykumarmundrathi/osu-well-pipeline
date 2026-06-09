@@ -23,14 +23,26 @@ _BUFFER = 5   # pixels added around bbox when cropping
 
 def _largest_quad_bbox(binary, cv_image, min_side: int = 50):
     """
-    Find the largest 4-vertex contour in `binary` whose width and height
-    each exceed `min_side` pixels. Returns (cropped_region, (x,y,w,h))
-    from the original `cv_image`. Returns (None, None) if no candidate
-    found.
+    Find the largest approximately-rectangular contour in `binary` whose
+    width and height each exceed `min_side` pixels. Returns
+    (cropped_region, (x,y,w,h)) from the original `cv_image`, or
+    (None, None) if no suitable candidate is found.
+
+    Vertex tolerance: accept contours that approxPolyDP reduces to 4–8
+    vertices (was: strictly 4).  The PLSS dot-grid has thick internal
+    quadrant-dividers that produce concave notches at each edge, causing
+    approxPolyDP to emit 6 vertices; requiring exactly 4 silently rejects
+    the correct grid and falls back to a smaller wrong region.  Allowing
+    up to 8 vertices captures these forms without introducing false
+    positives, because the caller (_extract_best_candidate) still applies
+    W/H range, AR, and line-density filters.
+
+    Bounding rect: uses cv2.boundingRect(cnt) on the raw contour rather
+    than on the approxPolyDP result so that notched/wavy contours produce
+    an accurate bounding box.
 
     epsilon = 0.04 × perimeter  (was 0.02): looser approximation tolerates
-    the slightly wavy borders common on century-old scanned grid lines without
-    producing spurious 5- or 6-vertex shapes.
+    the slightly wavy borders common on century-old scanned grid lines.
     """
     contours, _ = cv2.findContours(
         binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE,
@@ -39,10 +51,11 @@ def _largest_quad_bbox(binary, cv_image, min_side: int = 50):
     max_area = 0
     for cnt in contours:
         peri   = cv2.arcLength(cnt, True)
-        approx = cv2.approxPolyDP(cnt, 0.04 * peri, True)  # was 0.02
-        if len(approx) != 4:
+        approx = cv2.approxPolyDP(cnt, 0.04 * peri, True)
+        n      = len(approx)
+        if n < 4 or n > 8:          # 4-vertex clean rect or up to 8-vertex notched rect
             continue
-        x, y, w, h = cv2.boundingRect(approx)
+        x, y, w, h = cv2.boundingRect(cnt)   # boundingRect of raw contour (not approx)
         area = w * h
         if area > max_area and w > min_side and h > min_side:
             max_area, best = area, (x, y, w, h)

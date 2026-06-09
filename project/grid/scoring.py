@@ -43,7 +43,7 @@ from config import (
     GRID_H_LOOSE, GRID_H_STRICT,
     GRID_W_LOOSE, GRID_W_STRICT,
 )
-from grid.anchors import crop_box_from_anchor, find_grid_anchor
+from grid.anchors import ANCHOR_CROP_BY_TIER, crop_box_from_anchor, find_grid_anchor
 from grid.form_classifier import classify_form_type
 from grid.extractors import (
     extract_grid_region_adaptive,
@@ -118,18 +118,27 @@ def _line_density_score(region_bgr) -> float:
     return float(min(1.0, (h_pct + v_pct) * 20))
 
 
-def _extract_best_candidate(cv_image, w_min, w_max, h_min, h_max):
+def _extract_best_candidate(cv_image, w_min, w_max, h_min, h_max,
+                            ar_min=None, ar_max=None):
     """
     Run all six CV extractors against `cv_image`. Keep candidates whose
     width/height fall in [w_min..w_max] x [h_min..h_max], whose aspect
-    ratio is in [_AR_MIN.._AR_MAX], and whose line-density score is at
-    least _MIN_LINE_DENSITY (rejects text bands that look rectangular but
-    contain no grid lines).
+    ratio is in [ar_min..ar_max] (defaults to _AR_MIN.._AR_MAX), and whose
+    line-density score is at least _MIN_LINE_DENSITY (rejects text bands that
+    look rectangular but contain no grid lines).
 
-    Ranking: density first (morphological H/V line fraction), area as
-    tiebreaker.  Returns (grid_img, (x, y, w, h), method_name) or
-    (None, None, None).
+    ar_min / ar_max override the module-level defaults when supplied.  This
+    lets tier-aware callers restrict the AR window so landscape data-tables on
+    mid/late-era forms (AR ≈ 1.2-1.6) are not mistaken for portrait PLSS grids
+    (AR ≈ 0.55-0.90 for LATE tier, 0.45-0.75 for MID).
+
+    Ranking: density first (morphological H/V line fraction), then smallest area
+    as tiebreaker — preferring the tighter PLSS grid candidate over large
+    data tables that may sneak through the AR filter.
+    Returns (grid_img, (x, y, w, h), method_name) or (None, None, None).
     """
+    _ar_lo = ar_min if ar_min is not None else _AR_MIN
+    _ar_hi = ar_max if ar_max is not None else _AR_MAX
     candidates = []
     for name, func in _METHODS:
         try:
@@ -143,7 +152,7 @@ def _extract_best_candidate(cv_image, w_min, w_max, h_min, h_max):
             continue
         ar   = w / h if h > 0 else 0
         area = w * h
-        if not (_AR_MIN <= ar <= _AR_MAX
+        if not (_ar_lo <= ar <= _ar_hi
                 and w_min <= w <= w_max
                 and h_min <= h <= h_max
                 and area >= w_min * h_min):
@@ -155,7 +164,9 @@ def _extract_best_candidate(cv_image, w_min, w_max, h_min, h_max):
                            "bbox": bbox, "area": area, "density": density})
     if not candidates:
         return None, None, None
-    best = max(candidates, key=lambda c: (c["density"], c["area"]))
+    # Density is the primary signal; use smallest area as tiebreaker so we
+    # prefer the compact PLSS grid over larger data-table false positives.
+    best = max(candidates, key=lambda c: (c["density"], -c["area"]))
     return best["region"], best["bbox"], best["method"]
 
 
@@ -165,7 +176,9 @@ def extract_grid_region_combined(cv_image):
 
 
 def _try_anchor_on_page(manager, page_num_1indexed, cv_img,
-                        w_min, w_max, h_min, h_max, log):
+                        w_min, w_max, h_min, h_max, log,
+                        ar_min=None, ar_max=None,
+                        anchor_crop_params: dict | None = None):
     """
     Try the structural-anchor strategy on a single page.
 
@@ -174,6 +187,13 @@ def _try_anchor_on_page(manager, page_num_1indexed, cv_img,
     (e.g. 'Spot Well Correctly') forwarded to classify_form_type().
     ``method_label`` is prefixed with 'anchor_<position>_' so the summary
     CSV can tell anchor hits apart from full-page CV hits.
+
+    ar_min / ar_max are forwarded to _extract_best_candidate for tier-aware
+    aspect-ratio filtering (see its docstring).
+
+    anchor_crop_params: optional dict with keys look_above, look_below,
+    side_padding — overrides the defaults in crop_box_from_anchor().
+    When None the crop_box_from_anchor() defaults are used.
     """
     try:
         annotations, _ = get_page_annotations(
@@ -190,14 +210,24 @@ def _try_anchor_on_page(manager, page_num_1indexed, cv_img,
         return None, None, None, None
 
     ph, pw = cv_img.shape[:2]
-    crop_box = crop_box_from_anchor(anchor_bbox, pos, pw, ph)
+    _cp = anchor_crop_params or {}
+    crop_box = crop_box_from_anchor(
+        anchor_bbox, pos, pw, ph,
+        look_above=_cp.get("look_above", 700),
+        look_below=_cp.get("look_below", 1100),
+        side_padding=_cp.get("side_padding", 450),
+    )
     if crop_box is None:
         return None, None, None, None
 
     cx0, cy0, cx1, cy1 = crop_box
     region = cv_img[cy0:cy1, cx0:cx1]
+    log.debug("Anchor crop: pos=%s bbox=%s crop=(%d,%d,%d,%d) size=%dx%d",
+              pos, anchor_bbox, cx0, cy0, cx1, cy1,
+              cx1 - cx0, cy1 - cy0)
     grid_img, bbox, method = _extract_best_candidate(
         region, w_min, w_max, h_min, h_max,
+        ar_min=ar_min, ar_max=ar_max,
     )
     if grid_img is None:
         return None, None, None, None
@@ -218,6 +248,7 @@ def process_single_grid(
     logger: logging.Logger | None = None,
     relaxed: bool = False,
     skip_anchor: bool = False,
+    collection_num: int | None = None,
 ) -> dict:
     """
     Detect the section-township-range grid box on one of the PDF's pages.
@@ -229,12 +260,27 @@ def process_single_grid(
                           is found.  Anchor phrases are PRINTED text on all
                           collection tiers (confirmed Jun 2025 inspection of
                           Colls 1–13).
+    `collection_num`   -- used to look up tier-appropriate aspect-ratio bounds
+                          from config.TIER_GRID_AR.  When supplied, prevents
+                          false positives such as landscape data-tables on LATE
+                          forms (C11-C12) being mistaken for the PLSS grid
+                          (which should be portrait, AR ≈ 0.55-0.90).
 
     Each page is tried first with the structural anchor (unless skip_anchor),
     then falls back to the full-page CV extractors.
     """
+    from config import TIER_GRID_AR, tier_for as _tier_for
     log = logger or logging.getLogger(__name__)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Tier-aware AR bounds and anchor crop params.
+    _tier = _tier_for(collection_num)
+    _tier_ar = TIER_GRID_AR.get(_tier, (_AR_MIN, _AR_MAX))
+    ar_min_tier, ar_max_tier = _tier_ar
+    _anchor_crop = ANCHOR_CROP_BY_TIER.get(_tier)
+    log.debug("Grid tier=%s (coll=%s): AR=%.2f–%.2f  anchor_crop=%s",
+              _tier, collection_num, ar_min_tier, ar_max_tier,
+              _anchor_crop)
 
     if relaxed:
         w_min, w_max = GRID_W_LOOSE
@@ -273,6 +319,8 @@ def process_single_grid(
                 if not skip_anchor:
                     grid_img, bbox, method, anchor_phrase_found = _try_anchor_on_page(
                         manager, page_num, cv_img, w_min, w_max, h_min, h_max, log,
+                        ar_min=ar_min_tier, ar_max=ar_max_tier,
+                        anchor_crop_params=_anchor_crop,
                     )
                 else:
                     grid_img = bbox = method = None
@@ -281,6 +329,7 @@ def process_single_grid(
                 if grid_img is None:
                     grid_img, bbox, method = _extract_best_candidate(
                         cv_img, w_min, w_max, h_min, h_max,
+                        ar_min=ar_min_tier, ar_max=ar_max_tier,
                     )
             except _GridPageTimeout:
                 log.warning("Grid page %d timed out after %ds — skipping",

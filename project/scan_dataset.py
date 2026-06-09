@@ -161,23 +161,52 @@ def _scan_extracted_folder(
     return records
 
 
+def _collection_num_from_path(path: Path) -> int:
+    """
+    Try to extract a collection number from any ancestor directory matching
+    'ExportedFolderContents (N)'.  Returns 0 when no match is found.
+    Used by scan_flat_folder so that --flat runs on real collection dirs
+    still get tier-appropriate AR filtering in the grid stage.
+    """
+    import re
+    _pat = re.compile(r"ExportedFolderContents\s*\((\d+)\)", re.I)
+    for part in path.parts:
+        m = _pat.search(part)
+        if m:
+            return int(m.group(1))
+    return 0
+
+
 def scan_flat_folder(folder: Path) -> list[DatasetRecord]:
     """
     Recursively find all PDFs under folder.  Used for local testing or any
     directory that doesn't follow the ExportedFolderContents (N) naming.
+
+    When folder or its ancestors contain an 'ExportedFolderContents (N)'
+    directory, collection_num is extracted automatically so grid-detection AR
+    filters apply correctly for that collection's tier.
     """
     ts = _now()
-    return [
-        DatasetRecord(
+    # Detect collection_num from the folder path itself (covers the case where
+    # the user passes a sub-directory of a real collection, e.g.
+    # --flat "D:\ExportedFolderContents (11)\2001\01 - January").
+    base_cnum = _collection_num_from_path(folder.resolve())
+
+    records = []
+    for pdf in sorted(folder.rglob("*.pdf")):
+        # Per-PDF collection_num: inherit from base, or re-detect if the PDF
+        # lives deeper in a different ExportedFolderContents subtree.
+        cnum = base_cnum or _collection_num_from_path(pdf.resolve())
+        records.append(DatasetRecord(
             pdf_stem        = pdf.stem,
             pdf_path        = str(pdf),
             collection      = "local",
             collection_safe = "local",
+            collection_num  = cnum,
             file_size_bytes = pdf.stat().st_size,
             scan_timestamp  = ts,
-        )
-        for pdf in sorted(folder.rglob("*.pdf"))
-    ]
+        ))
+    return records
 
 
 # -- CSV I/O -------------------------------------------------------------------

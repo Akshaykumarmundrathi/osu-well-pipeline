@@ -94,17 +94,26 @@ def crop_box_from_anchor(anchor_bbox, position: str,
     """
     Compute a page region to crop before running grid extractors.
 
-    The crop is BIDIRECTIONAL — it extends `look_above` pixels above the
-    anchor and `look_below` pixels below it.  This tolerates positional
-    ambiguity: on some forms the label sits inside the grid box, on others
-    it sits just outside, and the exact direction varies by decade.
+    The crop extends `look_above` pixels above the anchor and `look_below`
+    pixels below it.  `position` is used to bias the vertical extent:
 
-    `position` is retained for signature compatibility but no longer controls
-    the vertical direction exclusively; it is used only as a hint when the
-    anchor sits so close to a page edge that one direction would be empty.
+      position='above'  → grid is ABOVE the anchor text.
+                          Use the caller-supplied look_above (or default 700).
+                          Clip look_below to max(100, look_below // 6) so we
+                          don't accidentally grab large data tables below.
 
-    `side_padding` is generous (450px) to capture grids centred on the page
-    even when the anchor phrase appears on the left margin.
+      position='below'  → grid is BELOW the anchor text.
+                          Use the caller-supplied look_below (or default 1100).
+                          Clip look_above to max(100, look_above // 6).
+
+    When the caller passes explicit look_above / look_below values the clipping
+    is skipped (the caller already knows what it wants).
+
+    `side_padding` controls the horizontal extent around the anchor x-range.
+    Generous defaults capture grids centred on the page even when the anchor
+    phrase appears on the left margin; tighter values (e.g. 280) help on
+    LATE-era forms where 'LOCATE WELL' sits directly below the PLSS grid and
+    wide crops would include unrelated data tables to the right.
 
     Returns (x0, y0, x1, y1) or None when the computed region is degenerate.
     """
@@ -115,10 +124,37 @@ def crop_box_from_anchor(anchor_bbox, position: str,
     cx0 = max(0,      x0 - side_padding)
     cx1 = min(page_w, x1 + side_padding)
 
-    # Extend bidirectionally around the anchor phrase
     cy0 = max(0,      y0 - look_above)
     cy1 = min(page_h, y1 + look_below)
 
     if cy1 <= cy0 or cx1 <= cx0:
         return None
     return (int(cx0), int(cy0), int(cx1), int(cy1))
+
+
+# Per-tier anchor crop params — tight crops for LATE/MODERN so that 'LOCATE WELL'
+# (which always sits directly below the PLSS grid on C11-C12 COMPLETION REPORTs)
+# doesn't result in a crop that spans the full page and includes data tables.
+#
+# Calibrated from visual inspection of C11 (2001-2018) forms at 2× resolution:
+#   • PLSS grid is ≈ 150–250 px tall and sits ≈ 80–300 px above 'LOCATE WELL'.
+#   • Using look_above=400 / look_below=80 / side_padding=300 captures the grid
+#     while excluding the formations / casing tables that fill the right half.
+#
+# For EARLY / TRANSITION / MID forms the original generous defaults are kept —
+# those forms have more layout variation and can tolerate extra crop area.
+ANCHOR_CROP_BY_TIER: dict[str, dict] = {
+    "early":      {"look_above": 700,  "look_below": 1100, "side_padding": 450},
+    "transition": {"look_above": 700,  "look_below": 800,  "side_padding": 400},
+    "mid":        {"look_above": 600,  "look_below": 600,  "side_padding": 380},
+    # LATE (C11-C12): "LOCATE WELL" sits DIRECTLY below the PLSS grid with
+    # approximately the same horizontal extent.  Calibrated from C11 2001
+    # COMPLETION REPORTs at 2× resolution:
+    #   • Grid is ≈ 315×292 px; top is ≈ 340 px above anchor y.
+    #   • Grid is centered ≈ ±157 px around the anchor x-centre.
+    #   • look_above=380 captures grid top with ≈40 px margin.
+    #   • side_padding=200 keeps the crop within the PLSS grid's x-extent and
+    #     excludes the formation/casing tables that appear further right.
+    "late":       {"look_above": 380,  "look_below": 30,   "side_padding": 200},
+    "modern":     {"look_above": 350,  "look_below": 50,   "side_padding": 250},
+}

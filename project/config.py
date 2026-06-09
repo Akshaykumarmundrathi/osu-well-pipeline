@@ -308,9 +308,27 @@ TIER_GRID_ZONES = {
 # already-broad GRID_W/H_STRICT band.
 TIER_GRID_AR = {
     TIER_EARLY:      (0.80, 1.60),   # landscape grids dominate (T1/T2)
-    TIER_TRANSITION: (0.50, 0.80),   # portrait T3 small grids
-    TIER_MID:        (0.45, 0.75),   # portrait mid-era
-    TIER_LATE:       (0.55, 0.90),   # medium portrait late-era
+    # TRANSITION (C7-C8, 1971-1982): measured from Jun 2026 C7 inspection —
+    # adaptive bbox=(79,123,209,207) → AR≈1.01; canny bbox=(80,125,204,217)
+    # → AR≈0.94.  Grids are roughly SQUARE, not portrait.  Old 0.80 upper
+    # bound rejected them.  1.30 accepts square grids while still rejecting
+    # the otsu false-positive (AR=1.66) and rotated false-positive (AR=2.37).
+    TIER_TRANSITION: (0.45, 1.30),   # was (0.50, 0.80) — C7/C8 grids are ~square
+    # MID (C9-C10, 1983-2000): C9 COMPLETION forms are LANDSCAPE (1624×1252)
+    # with roughly square PLSS grids — measured AR ≈ 1.0-1.08 from Jun 2026
+    # inspection.  The old upper bound 0.80 rejected the correct grid entirely.
+    # 1.30 leaves room for any slightly-landscape C10 variants while still
+    # rejecting wide text tables (AR > 1.3).
+    # Tight anchor-crop params (ANCHOR_CROP_BY_TIER "mid") provide the primary
+    # false-positive guard against right-side data columns.
+    TIER_MID:        (0.45, 1.30),   # was (0.45, 0.80) — C9 grid is ~square AR≈1.05
+    # LATE (C11-C12, 2001-2018): PLSS grid is ~315×292px on COMPLETION REPORTs
+    # — measured from Jun 2026 C11 inspection at 2× resolution → AR ≈ 1.08.
+    # Upper bound 1.20 still rejects the common casing/formation table false
+    # positive that originally scored AR ≈ 1.22 (573/470 px).
+    # Tight anchor-crop params (ANCHOR_CROP_BY_TIER "late") provide the primary
+    # false-positive guard; the AR bound is a secondary safety net.
+    TIER_LATE:       (0.55, 1.20),   # was (0.55, 0.90) — raised to accept C11 grid
     TIER_MODERN:     (0.45, 1.60),   # insufficient data — allow all
 }
 

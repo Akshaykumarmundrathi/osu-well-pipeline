@@ -506,21 +506,23 @@ def _try_page(
                                   method="pro")
                     return result, True
 
-        # -- Fallback: accept weaker structural anchor if above min threshold ----
-        if anchor_name and anchor_score >= FUZZY_MATCH_THRESHOLD:
-            log.info("County (anchor-weak) = %r  score=%d",
-                     anchor_name, anchor_score)
-            result.update(detected=True, name=anchor_name,
-                          fuzzy_score=anchor_score, confidence=anchor_score,
-                          method="anchor_weak")
-            return result, True
-
         log.warning("County not matched on page %d", page_num + 1)
         result["error"] = "no_match"
 
     except Exception as exc:
         log.error("Gemini failed on page %d: %s", page_num + 1, exc, exc_info=True)
         result["error"] = str(exc)
+
+    # -- Fallback: accept weaker structural anchor if above min threshold --------
+    # Placed OUTSIDE the try block so a Gemini RuntimeError (quota exhausted,
+    # API key invalid, network failure) never discards a valid Vision OCR anchor
+    # result.  anchor_name/anchor_score were captured before the Gemini call.
+    if not result.get("detected") and anchor_name and anchor_score >= FUZZY_MATCH_THRESHOLD:
+        log.info("County (anchor-weak) = %r  score=%d  (Gemini unavailable or no_match)",
+                 anchor_name, anchor_score)
+        result.update(detected=True, name=anchor_name,
+                      fuzzy_score=anchor_score, confidence=anchor_score,
+                      method="anchor_weak")
 
     return result, True
 

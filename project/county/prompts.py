@@ -164,7 +164,17 @@ def _rate_limited_generate(model, prompt, image, cfg):
           to exponential back-off once all rotation budget is spent (i.e. on
           the last remaining key).  This cuts P99 wait from 17 min to ~0s
           for the first two rotations.
+
+    Set GEMINI_DISABLED=1 to skip all Gemini calls instantly (useful when
+    daily quota is exhausted — the county extractor falls back to Vision OCR
+    anchor results rather than waiting through exponential back-off).
     """
+    if os.environ.get("GEMINI_DISABLED", "0").strip() == "1":
+        raise RuntimeError(
+            "Gemini disabled via GEMINI_DISABLED=1 — county stage will use "
+            "Vision OCR anchor result only."
+        )
+
     global _last_call
 
     model_name     = getattr(model, "model_name", str(model))

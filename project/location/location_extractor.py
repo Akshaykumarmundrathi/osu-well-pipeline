@@ -655,20 +655,26 @@ def process_single_location(
                 if not strat_used:
                     strat_used = "per_keyword"
 
-            # -- Strategy 3: Gemini on the crop (matches original phaseI.py) --
-            # When OCR regex + per-keyword both failed to yield ≥2 fields,
-            # send the binarized crop to Gemini Flash — same approach the
-            # original monolithic pipeline used before the modular rewrite.
+            # -- Strategy 3: Gemini on the keyword crop ----------------------
+            # Run when OCR regex yields fewer than 3 fields so that any
+            # missing field (e.g. Range when section + township were parsed)
+            # is filled by Gemini reading the crop image directly.
+            #
+            # Using `found < 3` (instead of the old `found < 2`) catches the
+            # common "2-of-3" partial result where OCR succeeds on two labels
+            # but misses one value — Gemini fills in the gap without replacing
+            # the two correct values (the `sec = sec or g_sec` merge below
+            # preserves existing non-empty values).
             #
             # Two sub-cases:
             #   3a. Strategy 1 found a keyword group → use that crop bbox.
+            #       This is the v4-style tight-crop approach: keyword positions
+            #       from OCR → span all 3 keyword boxes → crop PNG → Gemini.
             #   3b. No keyword group (T2_MED handwritten forms where OCR
             #       finds zero tokens) → fall back to the zone-filter region
-            #       (right of grid / upper-right quadrant).  This is the
-            #       critical path for the ~277 T2_MED not_found failures:
-            #       OCR sees nothing, but Gemini can read the handwriting
-            #       directly from the expected STR region.
-            if found < 2:
+            #       (right of grid / upper-right quadrant).  Critical path for
+            #       forms where Gemini reads handwriting from the expected zone.
+            if found < 3:
                 _gemini_crop_box = crop_box   # may be None
                 if _gemini_crop_box is None and zone_region is not None:
                     # Use the zone region as the Gemini crop (clamped to page).
@@ -682,6 +688,7 @@ def process_single_location(
                         _gemini_crop_box = None
 
                 if _gemini_crop_box is not None:
+                    _prev_found = found   # track how many fields OCR had before Gemini
                     g_sec, g_twp, g_rng = _gemini_str_from_crop(
                         pil_image.crop(_gemini_crop_box), log,
                     )
@@ -691,8 +698,13 @@ def process_single_location(
                     found = sum(bool(v) for v in (sec, twp, rng))
                     if found > 0 and raw_text == "":
                         raw_text = f"gemini: sec={sec} twp={twp} rng={rng}"
-                    if not strat_used and found > 0:
-                        strat_used = "gemini_zone" if crop_box is None else "gemini"
+                    if found > 0:
+                        if not strat_used:
+                            # No OCR fields at all — pure Gemini result.
+                            strat_used = "gemini_zone" if crop_box is None else "gemini"
+                        elif _prev_found > 0:
+                            # Gemini filled gaps in a partial OCR result.
+                            strat_used = strat_used + "+gemini_fill"
 
             # -- Strategy 4 LATE: vertical label-over-value (normal order) -----
             # For non-LATE form types, try vertical extraction as a last resort
@@ -712,10 +724,19 @@ def process_single_location(
                 continue
 
             # Confidence: strategy-weighted scoring.
-            # grouped/per-keyword/vertical OCR → up to 100 (based on fields found).
-            # Gemini fallback → 75 cap (less reliable for exact numbers).
-            gemini_used = strat_used == "gemini"
-            conf = min(75, (found * 100) // 3) if gemini_used else (found * 100) // 3
+            # grouped / per-keyword / vertical (pure OCR) → up to 100 per field.
+            # gemini / gemini_zone → cap at 75 (Gemini can misread printed numbers).
+            # *+gemini_fill → Gemini filled a gap; score the mix between OCR and Gemini.
+            _is_pure_gemini  = strat_used in ("gemini", "gemini_zone")
+            _is_gemini_fill  = strat_used and "+gemini_fill" in strat_used
+            base_conf = (found * 100) // 3
+            if _is_pure_gemini:
+                conf = min(75, base_conf)
+            elif _is_gemini_fill:
+                # OCR gave partial; Gemini topped up — score at 85 ceiling.
+                conf = min(85, base_conf)
+            else:
+                conf = base_conf
 
             # Save crop + annotated page when we have a crop box.
             crop_path = ann_path = None

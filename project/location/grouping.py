@@ -182,20 +182,33 @@ def get_unified_bounding_box(group, section_right_extension=200):
     """
     Return a unified bounding box from a group dictionary.
 
-    When a ``section`` candidate is present, the section bbox is used as
-    the left anchor and extended right by ``section_right_extension`` pixels
-    to capture the associated value.
+    Spans ALL three keyword boxes (section + township + range) so that
+    the crop and the Gemini image always cover every field-value zone, not
+    just the section area.  Each keyword bbox already has ``extend_right``
+    (typically 500 px) added on the right by ``find_keywords_lists()``, so
+    taking the rightmost box's x_max and adding ``section_right_extension``
+    (200 px more) gives enough room past the Range value without over-cropping.
 
-    Otherwise the pre-computed ``unified`` fallback box is returned.
+    Falls back to the pre-computed ``unified`` box when the group was built
+    without a section anchor (township + range only).
     """
     if group is None:
         return None
 
-    if group.get("section") is not None:
-        s = group["section"]
-        return [s[0], s[1], s[2] + section_right_extension, s[3]]
-
+    # Fallback group has no individual keyword boxes — use its precomputed box.
     if "unified" in group:
         return group["unified"]
 
-    return None
+    # Normal group: span section + township + range to capture all field values.
+    boxes = [group[k] for k in ("section", "township", "range")
+             if group.get(k) is not None]
+    if not boxes:
+        return None
+
+    x_min = min(b[0] for b in boxes)
+    y_min = min(b[1] for b in boxes)
+    # b[2] already includes extend_right from find_keywords_lists (500 px by default);
+    # add section_right_extension (200 px) past the rightmost keyword's value zone.
+    x_max = max(b[2] for b in boxes) + section_right_extension
+    y_max = max(b[3] for b in boxes)
+    return [x_min, y_min, x_max, y_max]

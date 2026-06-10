@@ -76,44 +76,82 @@ _QUOTA_MAX_RETRIES  = 6
 # ---------------------------------------------------------------------------
 _api_keys:       list[str]  = []   # populated by setup_gemini()
 _current_key_idx: int       = 0
-_exhausted_keys:  set[int]  = set()
+_exhausted_keys:  set[int]  = set()   # kept for quota_events.json compat (keys in long cooldown)
 _key_lock        = threading.Lock()
 _key_rotation_count: int    = 0    # total rotations this process lifetime
+
+# Per-key cooldown instead of permanent exhaustion.  A single 429 usually
+# means the project's 10 RPM minute-window is spent, NOT its daily quota —
+# permanently blacklisting on first 429 (the old behaviour) let a handful of
+# transient blips strand the worker on one key in 6×exponential backoff
+# (observed: 25 min stuck on a single record).  Cooldowns expire; repeated
+# 429s on the same key escalate the cooldown (RPM blip → daily exhaustion).
+_key_cooldown:   dict[int, float] = {}   # key idx -> monotonic time when usable again
+_key_429_streak: dict[int, int]   = {}   # key idx -> consecutive 429 count
+_COOLDOWN_BASE_S = 75.0                  # one RPM window + margin
+_COOLDOWN_MAX_S  = 3600.0                # cap: 1h (effectively "try again much later")
+
+
+def _cool_key(idx: int) -> float:
+    """Register a 429 on key `idx`; set escalating cooldown. Returns cooldown s."""
+    streak = _key_429_streak.get(idx, 0) + 1
+    _key_429_streak[idx] = streak
+    cool = min(_COOLDOWN_BASE_S * (4 ** (streak - 1)), _COOLDOWN_MAX_S)
+    _key_cooldown[idx] = time.monotonic() + cool
+    # Reflect long-cooldown keys in the exhausted set for observability.
+    if cool >= 1200:
+        _exhausted_keys.add(idx)
+    return cool
 
 
 def _rotate_key() -> bool:
     """
-    Switch genai to the next non-exhausted key.
-    Returns True if a fresh key was activated; False if all keys are spent.
+    Switch genai to the next key whose cooldown has expired.
+    Returns True if a fresh key was activated; False if every key is cooling.
     Resets per-model quota state so the new key gets a clean slate.
     """
     global _current_key_idx, _key_rotation_count
     if not _api_keys:
         return False
     with _key_lock:
+        now = time.monotonic()
         start = _current_key_idx
         for i in range(1, len(_api_keys) + 1):
             candidate = (start + i) % len(_api_keys)
-            if candidate not in _exhausted_keys:
+            if _key_cooldown.get(candidate, 0.0) <= now:
                 _current_key_idx = candidate
                 _key_rotation_count += 1
+                _exhausted_keys.discard(candidate)
                 genai.configure(api_key=_api_keys[_current_key_idx])
                 with _quota_lock:
                     _quota_state.clear()
                 log.warning(
                     "Gemini API key rotated: now using key %d/%d "
-                    "(rotation #%d, exhausted keys: %s)",
+                    "(rotation #%d, cooling keys: %s)",
                     _current_key_idx + 1, len(_api_keys),
-                    _key_rotation_count, sorted(_exhausted_keys),
+                    _key_rotation_count,
+                    sorted(k for k, t in _key_cooldown.items() if t > now),
                 )
                 _write_quota_events()
                 return True
-        log.error(
-            "All %d Gemini API key(s) exhausted after %d rotation(s) — "
-            "county stage will fail for remaining records.",
-            len(_api_keys), _key_rotation_count,
+        log.warning(
+            "All %d Gemini key(s) cooling down — soonest available in %.0fs",
+            len(_api_keys),
+            max(0.0, min(_key_cooldown.values()) - now) if _key_cooldown else 0.0,
         )
         return False
+
+
+def _sleep_until_key_available() -> None:
+    """Block until the soonest key cooldown expires (plus small jitter)."""
+    with _key_lock:
+        if not _key_cooldown:
+            return
+        wait = min(_key_cooldown.values()) - time.monotonic()
+    if wait > 0:
+        wait = min(wait, _COOLDOWN_MAX_S) + random.uniform(0.5, 2.0)
+        log.warning("Sleeping %.0fs until a Gemini key cools down", wait)
+        time.sleep(wait)
 
 
 def _write_quota_events():
@@ -226,39 +264,31 @@ def _rate_limited_generate(model, prompt, image, cfg):
                 )
 
                 if is_quota:
-                    # ── Multi-key fast path: rotate immediately ────────────────
-                    # Don't burn time on back-off when another key is available.
-                    if len(_api_keys) > 1 and key_rotations < max_rotations:
-                        log.warning(
-                            "Gemini %s quota hit (key %d/%d) — rotating key immediately",
-                            model_name,
-                            _current_key_idx + 1, len(_api_keys),
-                        )
-                        with _key_lock:
-                            _exhausted_keys.add(_current_key_idx)
-                        if _rotate_key():
-                            key_rotations += 1
-                            _clear_quota_state(model_name)
-                            key_just_rotated = True
-                            break       # break inner → outer will retry with new key
-                        # _rotate_key() returned False — all keys somehow gone
-                        raise RuntimeError(
-                            f"All {len(_api_keys)} Gemini API key(s) exhausted "
-                            f"after {key_rotations} rotation(s)."
-                        )
-
-                    # ── Single key or all rotation budget spent: back-off ──────
-                    delay = _record_quota_hit(model_name)
+                    # ── Cool the current key, rotate to next available ─────────
+                    # A 429 = this key's RPM window (or rarely its RPD) is spent.
+                    # Cooldown is escalating per key; rotation finds any key
+                    # whose cooldown expired.  We never permanently blacklist.
+                    with _key_lock:
+                        cool = _cool_key(_current_key_idx)
                     log.warning(
-                        "Gemini %s quota hit (attempt %d/%d, key %d/%d) — backoff %.0fs: %s",
-                        model_name, attempt, _QUOTA_MAX_RETRIES,
-                        _current_key_idx + 1, len(_api_keys) or 1,
-                        delay, exc_str[:120],
+                        "Gemini %s quota hit (key %d/%d) — key cooling %.0fs, rotating",
+                        model_name,
+                        _current_key_idx + 1, len(_api_keys) or 1, cool,
                     )
+                    if len(_api_keys) > 1 and _rotate_key():
+                        key_rotations += 1
+                        _clear_quota_state(model_name)
+                        key_just_rotated = True
+                        break       # break inner → outer retries with new key
+                    # No key currently available: wait for the soonest cooldown
+                    # then continue this attempt loop (do NOT raise — quotas
+                    # recover on their own).
+                    _sleep_until_key_available()
+                    _rotate_key()
                     if attempt == _QUOTA_MAX_RETRIES:
                         quota_exhausted = True
-                        break          # break inner loop → try key rotation below
-                    continue           # sleep handled at top of next iteration
+                        break
+                    continue
 
                 if is_server and attempt < _QUOTA_MAX_RETRIES:
                     sleep = min(5 * attempt + random.uniform(0, 3), 60)
@@ -276,22 +306,18 @@ def _rate_limited_generate(model, prompt, image, cfg):
             continue   # outer loop: retry from scratch with new key
 
         if quota_exhausted:
-            # Mark this key as spent and try to rotate if budget remains.
-            with _key_lock:
-                _exhausted_keys.add(_current_key_idx)
-            if key_rotations < max_rotations and _rotate_key():
-                key_rotations += 1
-                log.warning(
-                    "Key rotation %d/%d — retrying call from scratch",
-                    key_rotations, max_rotations,
-                )
-                continue   # retry with new key
-            # All keys exhausted — give a clear error.
+            # All attempts spent while every key was cooling.  Give the pool
+            # one final recovery window, then fail THIS CALL only (the record
+            # is marked failed and the run continues — quotas recover, a later
+            # county-only pass picks these up).
+            _sleep_until_key_available()
+            if _rotate_key():
+                log.warning("Final-chance key rotation — retrying call from scratch")
+                continue
             raise RuntimeError(
-                f"All {len(_api_keys) or 1} Gemini API key(s) exhausted "
-                f"({_QUOTA_MAX_RETRIES} retries each, {key_rotations} rotation(s)). "
-                "Add more keys to GOOGLE_API_KEY (comma-separated) or upgrade to a "
-                "paid Gemini plan."
+                f"Gemini quota: all {len(_api_keys) or 1} key(s) still cooling after "
+                f"{_QUOTA_MAX_RETRIES} attempts — failing this call only. "
+                "Quota recovers on its own; re-run the county stage later."
             )
         break   # normal exit (return inside try is the only real path here)
 

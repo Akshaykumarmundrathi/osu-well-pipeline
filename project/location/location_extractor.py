@@ -732,6 +732,58 @@ def process_single_location(
                 if not strat_used and found > 0:
                     strat_used = "vertical"
 
+            # -- Zone-filter fallback: hints are heuristics, not ground truth --
+            # If a zone region was active and every OCR strategy failed inside
+            # it, retry the cheap strategies once against the WHOLE page.
+            # Measured on the C2-C5 sample: records with no hint succeeded at
+            # 67% vs 39-44% for hinted ones — a wrong hint is worse than none.
+            # Gemini is intentionally excluded here (no extra API cost).
+            if found < 2 and zone_region is not None:
+                fp_secs, fp_twps, fp_rngs = find_keywords_lists(
+                    annotations, LOCATION_KEYWORDS, extend_right, padding_height)
+                group = choose_group(fp_secs, fp_twps, fp_rngs,
+                                     min_overlap=overlap)
+                if group is not None:
+                    unified_box = get_unified_bounding_box(
+                        group, section_right_extension)
+                    if unified_box is not None:
+                        x0 = max(0, int(unified_box[0]))
+                        y0 = max(0, int(unified_box[1]))
+                        x1 = min(pw, int(unified_box[2]))
+                        y1 = min(ph, int(unified_box[3]))
+                        if x1 > x0 and y1 > y0:
+                            crop_box = (x0, y0, x1, y1)
+                            raw_text = _annotations_in_box(
+                                annotations,
+                                max(0, x0 - 250), max(0, y0 - 250),
+                                min(pw, x1 + 250), min(ph, y1 + 250))
+                            f_sec, f_twp, f_rng = _extract_str(raw_text)
+                            sec = sec or f_sec
+                            twp = twp or f_twp
+                            rng = rng or f_rng
+                if sum(bool(v) for v in (sec, twp, rng)) < 2:
+                    p_sec, p_twp, p_rng = _per_keyword_extract(
+                        annotations,
+                        {"section": fp_secs, "township": fp_twps,
+                         "range": fp_rngs},
+                        pw, right_extend=extend_right)
+                    sec = sec or p_sec
+                    twp = twp or p_twp
+                    rng = rng or p_rng
+                if sum(bool(v) for v in (sec, twp, rng)) < 2:
+                    v_sec, v_twp, v_rng = _extract_str_vertical(annotations)
+                    sec = sec or v_sec
+                    twp = twp or v_twp
+                    rng = rng or v_rng
+                found = sum(bool(v) for v in (sec, twp, rng))
+                if found >= 2:
+                    strat_used = ((strat_used + "+fullpage")
+                                  if strat_used else "fullpage_fallback")
+                    if not raw_text:
+                        raw_text = f"fullpage: sec={sec} twp={twp} rng={rng}"
+                    log.debug("Zone hint failed but full-page fallback "
+                              "recovered: sec=%s twp=%s rng=%s", sec, twp, rng)
+
             if found < 2:
                 continue
 

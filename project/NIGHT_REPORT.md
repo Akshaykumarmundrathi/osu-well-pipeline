@@ -2,6 +2,20 @@
 
 Status legend: ✅ done · 🔄 running when you read this · ⚠️ needs your decision
 
+## FINAL SCOREBOARD (after repair2, all 3,690 C2-C5 records)
+
+| Stage | before tonight | after | change |
+|---|---|---|---|
+| Location | 35% (852 done) | **64% (2,385 done)** | **+29 pts, 2.8×** |
+| Full 3-field STR | 402 | **1,064** | 2.6× |
+| Dot | 54% | **76% (2,198)** | +22 pts |
+| Grid | 78% | 77% (2,874) | flat (harder records added) |
+| County | 83% | 69% 🔄 | dipped — reset records re-ran Vision-only; **Gemini upgrade pass running now** (1,128 records, fresh quota, monitored) |
+
+STR plausibility holds at 98%. Top remaining gap: missing range (638) —
+the 2× OCR-resolution floor (see audit #4); next lever is a 2.5× re-OCR
+retry tier.
+
 ## Headline wins
 
 1. ✅ **C2-C5 main run finished** — 3,700/3,700 in 4h46m, exit 0.
@@ -78,6 +92,16 @@ Pattern so far: all 3 freezes happened at/right after month-batch boundaries
 - ⚠️ Gemini: 11/12 keys exhausted yesterday; quota reset at midnight Pacific.
   GEMINI_DISABLED=1 still set in .env pending your go-ahead.
 - Cost reminder for full 570K cloud run: ~$1,570 Vision + ~$30-50 Gemini paid tier.
+
+## D-drive output inventory (24 dirs, ~24 GB)
+
+| dir | size | note |
+|---|---|---|
+| `project_outputs` | 17 GB | live master (514K rows) |
+| `project_outputs_local` | 6.5 GB | old May run — source of the historic 3,377-well map; keep until S3 verified |
+| `project_outputs_enrichtest` | 126 MB | tonight's enrichment workspace |
+| `project_outputs_c2345` | 250 MB | C2-C5 index + snapshots |
+| 15× `smoke_*` / `test*` dirs | ~150 MB | dev clutter — safe to delete after you confirm (not touched) |
 
 ## Storage insight
 

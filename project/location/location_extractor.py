@@ -256,6 +256,18 @@ def _extract_str(raw: str) -> tuple[str, str, str]:
         if of_m:
             sec = _validate_section(of_m.group(1))
 
+    # Missing-RGE-keyword fallback: at 2x render Vision OCR often drops the
+    # small printed "RGE" label entirely while its VALUE survives ("17 E").
+    # When sec+twp matched but range didn't, accept a trailing "<num> E/W"
+    # after the township match.  The E/W suffix is required — township uses
+    # N/S, so a bare direction-suffixed number after TWP is almost certainly
+    # the range.
+    if sec and twp and not rng and twp_m:
+        tail = raw[twp_m.end():]
+        rng_v = re.search(r"\b(\d{1,3})\s*([EW])\b", tail, re.I)
+        if rng_v:
+            rng = _validate_twprng(_clean(rng_v.group(1) + rng_v.group(2)))
+
     return sec, twp, rng
 
 

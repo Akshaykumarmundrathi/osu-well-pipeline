@@ -122,6 +122,12 @@ def choose_group(sections, townships, ranges, min_overlap=0.5):
 
     Returns a dict or None.
     """
+    # NOTE: keyword boxes arrive PRE-EXTENDED (+extend_right, typically 500px,
+    # on x_max) from find_keywords_lists().  Ordering must therefore compare
+    # x_min values: requiring t_x_min > s_x_max meant "township starts more
+    # than 500px right of section", which never fires on compact same-line
+    # headers (1940s forms space SEC/TWP/RGE ~150-220px apart) and silently
+    # disabled the triplet path for those layouts.
     for s in sections:
         s_x_min, s_y_min, s_x_max, s_y_max = s
         candidate_t = None
@@ -130,7 +136,7 @@ def choose_group(sections, townships, ranges, min_overlap=0.5):
         for t in townships:
             t_x_min, t_y_min, t_x_max, t_y_max = t
             if (
-                t_x_min > s_x_max
+                t_x_min > s_x_min
                 and vertical_overlap(s_y_min, s_y_max,
                                      t_y_min, t_y_max) >= min_overlap
             ):
@@ -140,7 +146,7 @@ def choose_group(sections, townships, ranges, min_overlap=0.5):
         for r in ranges:
             r_x_min, r_y_min, r_x_max, r_y_max = r
             if (
-                r_x_min > s_x_max
+                r_x_min > s_x_min
                 and vertical_overlap(s_y_min, s_y_max,
                                      r_y_min, r_y_max) >= min_overlap
             ):
@@ -174,6 +180,29 @@ def choose_group(sections, townships, ranges, min_overlap=0.5):
                 union_y_max + 80,
             ],
         }
+
+    # Fallback: section + township but NO range keyword.  At 2x render the
+    # small printed "RGE" label is frequently below Vision OCR's resolution
+    # floor (verified on 1940s C3 headers: "RGE" vanishes at 2x, reads fine
+    # at 2.5x) — this was the single biggest source of missing-range partials.
+    # Build a unified box over sec+twp keywords extended right, so the range
+    # VALUE ("17 E") is still inside the crop even though its label is gone.
+    if sections and townships:
+        for s in sections:
+            for t in townships:
+                if (t[0] > s[0]
+                        and vertical_overlap(s[1], s[3], t[1], t[3]) >= min_overlap):
+                    return {
+                        "section":  None,
+                        "township": None,
+                        "range":    None,
+                        "unified": [
+                            s[0] - 100,
+                            min(s[1], t[1]) - 80,
+                            t[2] + 500,
+                            max(s[3], t[3]) + 80,
+                        ],
+                    }
 
     return None
 

@@ -51,6 +51,10 @@ try:
     def _fuzzy_match(text: str) -> tuple[str, int]:
         """Best fuzzy match in COUNTY_LIST_CLEAN above FUZZY_MATCH_THRESHOLD."""
         clean = text.lower().replace("county", "").strip()
+        # WRatio partial-matches substrings, so 1-2 char OCR noise (e.g. 'N')
+        # scores 90 against 'blaine'. Shortest real base name is 'Kay' (3).
+        if len(clean) < 3:
+            return "", 0
         m = _rfuzz.extractOne(clean, COUNTY_LIST_CLEAN,
                               score_cutoff=FUZZY_MATCH_THRESHOLD)
         if m:
@@ -64,6 +68,8 @@ except ImportError:
     def _fuzzy_match(text: str) -> tuple[str, int]:
         """difflib fallback when rapidfuzz isn't installed."""
         clean   = text.lower().replace("county", "").strip()
+        if len(clean) < 3:
+            return "", 0
         matches = difflib.get_close_matches(
             clean, COUNTY_LIST_CLEAN, n=1, cutoff=FUZZY_MATCH_THRESHOLD / 100
         )

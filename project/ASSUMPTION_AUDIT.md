@@ -106,3 +106,38 @@ Recipes are DATA (a dict/CSV), not code branches — adding a new form type
 = adding a row, not a new pipeline. Switching logic stays in one place and
 every recipe inherits the universal rule from this audit: **hints reorder
 and bound the search; they never terminate it.**
+
+## Survey results (130 PDFs, 10/collection, 2026-06-10)
+
+Text fingerprints DO cluster by era:
+
+| signal | era |
+|---|---|
+| title "WELL RECORD" | C1-C3 |
+| "Form 1002" printed id | C1-C6 (~50% of samples surface it) |
+| title "FARM NAME" / "OIL AND GAS CONSERVATION DEPT" | C3-C8 |
+| "PLEASE TYPE OR USE BLACK INK ONLY" | C8-C9 |
+| "OIL AND GAS CONSERVATION DIVISION" | C7-C10 |
+| "HORIZONTAL HOLE" / "STRAIGHT HOLE" + Form 1002A | C11-C13 |
+
+Verdict: form id alone is too sparse (regex now fixed for glued "1002A"),
+but id+title+boilerplate is a workable router. Keyword-constellation
+columns (sec/twp/rge/county normalised x,y) are in form_fingerprints.csv
+awaiting clustering.
+
+## 12. C13 "20% grid rate" — 🟢 NOT a bug, an artifact + design truth
+
+Visual inspection (CHURCH 1-3MH, 2022, Form 1002A): modern completion
+reports have **no grid drawing at all**. They carry the location as TEXT:
+`Location: BLAINE 3 19N 12W / NE NW NW NW / 175 FNL 595 FWL` plus explicit
+`Latitude: 36.158211 Longitude: -98.475169`.
+
+- The real pipeline already handles this: latlong success (77% prior on
+  C13) skips grid+location downstream. Correct by design.
+- The smoke test's 20% number is an artifact of FORCING --stage grid on
+  gridless forms. **Stage-isolated smoke tests mislead on tiers where the
+  stage is not applicable** — smoke reports need a per-tier expectation,
+  not a uniform target.
+- The 4/20 C13 "detections" are casing/test-data tables (same false-
+  positive family as the early-tier bug). Harmless when latlong wins,
+  but a MODERN-tier table guard would clean the stats.

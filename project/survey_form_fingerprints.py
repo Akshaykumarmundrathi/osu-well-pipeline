@@ -52,7 +52,8 @@ OUTPUT_ROOT = Path(os.environ.get("OUTPUT_ROOT", r"D:\project_outputs"))
 OUT_CSV     = OUTPUT_ROOT / "form_fingerprints.csv"
 
 _FORM_ID_RE = re.compile(
-    r"\b(?:Form|FORM)\s*(?:No\.?\s*)?([0-9]{3,5}(?:-[A-Z0-9]+)?|[A-Z]{1,4}-?[0-9]{2,5})\b")
+    r"\b(?:Form|FORM)\s*(?:No\.?\s*)?"
+    r"([0-9]{3,5}(?:[-\s]?[A-Z0-9]{1,4})?|[A-Z]{1,4}-?[0-9]{2,5})\b")
 _TITLE_RE   = re.compile(r"^[A-Z][A-Z .&'-]{6,40}$")
 
 FIELDS = ["collection", "year", "pdf_stem", "page", "n_tokens",

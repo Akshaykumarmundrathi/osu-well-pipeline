@@ -1260,6 +1260,7 @@ def _dispatch(stage: str, manager: PDFDocumentManager,
                 str_strategy_hint=_str_strategy_hint,
                 str_zone=_str_zone,
                 grid_bbox=_grid_bbox,
+                collection_num=record.collection_num if record else None,
             )
             if fallback.get("detected"):
                 fallback["strategy_used"] = "str_keywords_fallback"
@@ -1274,6 +1275,7 @@ def _dispatch(stage: str, manager: PDFDocumentManager,
             str_strategy_hint=_str_strategy_hint,
             str_zone=_str_zone,
             grid_bbox=_grid_bbox,
+            collection_num=record.collection_num if record else None,
         )
 
     if stage == STAGE_COUNTY:

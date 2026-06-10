@@ -506,6 +506,7 @@ def process_single_location(
     str_strategy_hint: str | None = None,
     str_zone: str | None = None,
     grid_bbox=None,
+    collection_num: int | None = None,
 ) -> dict:
     """
     Scan pages for section/township/range. Strategy order:
@@ -579,15 +580,24 @@ def process_single_location(
 
             pw, ph = pil_image.size
             # Compute the zone-filter region (only once; page size is constant).
+            # Priority: hand-measured per-collection recipe (2,261 manually
+            # drawn STR boxes — see location/recipes.py) > generic zone hint.
+            # Either way the full-page fallback below still protects misses.
             if pw != pw0 or ph != ph0:
                 pw0, ph0 = pw, ph
-                zone_region = _region_for_zone(str_zone, pw, ph, grid_bbox)
-                _zone_region_cache[0] = zone_region
+                from location.recipes import str_region as _recipe_region
+                zone_region = _recipe_region(collection_num, pw, ph)
                 if zone_region:
-                    log.debug(
-                        "STR zone filter active: zone=%s region=%s",
-                        str_zone, zone_region,
-                    )
+                    log.debug("STR recipe region (coll %s): %s",
+                              collection_num, zone_region)
+                else:
+                    zone_region = _region_for_zone(str_zone, pw, ph, grid_bbox)
+                    if zone_region:
+                        log.debug(
+                            "STR zone filter active: zone=%s region=%s",
+                            str_zone, zone_region,
+                        )
+                _zone_region_cache[0] = zone_region
             else:
                 zone_region = _zone_region_cache[0]
 

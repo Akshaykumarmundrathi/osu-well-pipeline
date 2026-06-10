@@ -269,7 +269,7 @@ def process_single_grid(
     Each page is tried first with the structural anchor (unless skip_anchor),
     then falls back to the full-page CV extractors.
     """
-    from config import TIER_GRID_AR, tier_for as _tier_for
+    from config import TIER_GRID_AR, TIER_GRID_W_MAX, tier_for as _tier_for
     log = logger or logging.getLogger(__name__)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -290,6 +290,14 @@ def process_single_grid(
         w_min, w_max = GRID_W_STRICT
         h_min, h_max = GRID_H_STRICT
         mode         = "strict"
+
+    # Tier width cap: early/transition grids never exceed ~558 px (p99=411,
+    # measured from 1,000 dot-verified detections), while the mid-page casing/
+    # water-sands tables that fool the detector are 577-812 px.  Capping w_max
+    # rejects the table at candidate level so the real grid can win.
+    _w_cap = TIER_GRID_W_MAX.get(_tier)
+    if _w_cap:
+        w_max = min(w_max, _w_cap)
 
     # Always iterate FORWARD (page 1 first).  Grid is on the front/first page
     # for the vast majority of forms across all 13 collections.  Reverse order
@@ -366,6 +374,7 @@ def process_single_grid(
                 page_w=pw, page_h=ph,
                 anchor_phrase=anchor_phrase_found,
                 grid_ar=ar_detected,
+                tier=_tier,
             )
             log.info("Form classifier: %s  zone=%s  str_zone=%s  ar=%.2f",
                      form_info["form_type"], form_info["grid_zone"],

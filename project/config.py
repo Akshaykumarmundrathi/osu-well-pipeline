@@ -331,6 +331,18 @@ TIER_GRID_AR = {
     TIER_MODERN:     (0.45, 1.60),   # insufficient data — allow all
 }
 
+# Per-tier maximum grid WIDTH (pixels at 2× render).
+# Measured Jun 2026 from 1,000 dot-verified early-tier grids: p99=411, max=558.
+# The mid-page CASING RECORD / WATER SANDS tables that masquerade as grids on
+# 1930s-40s forms are 577-812 px wide (median 628) — 449 records in the C2-C5
+# sample had that table detected instead of the real top-left grid, which
+# cascaded into MID misclassification, 1% location and 8% dot success.
+# A 565 px cap separates the two populations almost perfectly.
+TIER_GRID_W_MAX = {
+    TIER_EARLY:      565,
+    TIER_TRANSITION: 565,
+}
+
 
 def tier_for(collection_num: int | None) -> str:
     """

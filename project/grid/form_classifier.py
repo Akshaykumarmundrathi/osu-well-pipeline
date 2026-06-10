@@ -131,6 +131,7 @@ def classify_form_type(
     page_h: int,
     anchor_phrase: str | None = None,
     grid_ar: float | None = None,
+    tier: str | None = None,
 ) -> dict:
     """
     Classify the PDF form type from the detected grid's geometry + anchor.
@@ -255,7 +256,22 @@ def classify_form_type(
     # Mid-era forms (Collections 9–10, ~1983–2000).
     # STR label block sits to the LEFT of the grid on the same horizontal
     # band.  County can be in any of the three formats.
+    #
+    # GUARD: MID forms do not exist before ~1983.  On early/transition tier
+    # records a top-center "grid" is almost always a casing/water-sands TABLE
+    # false positive (449 such records in the Jun 2026 C2-C5 sample had 1%
+    # location success because the MID hints pointed every stage at the wrong
+    # page regions).  Return open ANY hints so the location/county extractors
+    # search the whole page instead of trusting a wrong zone.
     if zone == ZONE_TOP_CENTER:
+        if tier in ("early", "transition"):
+            return {
+                "form_type":          FORM_UNKNOWN,
+                "grid_zone":          zone,
+                "str_zone":           STR_ANY,
+                "county_format_hint": COUNTY_ANY,
+                "str_strategy_hint":  STR_STRAT_ANY,
+            }
         return {
             "form_type":          FORM_MID,
             "grid_zone":          zone,
@@ -272,6 +288,16 @@ def classify_form_type(
     #   County    SEC    TWP    RGE
     #   Garvin    15     23N    10W
     if zone == ZONE_TOP_RIGHT:
+        # Same guard as top-center: LATE forms start ~2001, so on early/
+        # transition tiers this is a false-positive zone — use open hints.
+        if tier in ("early", "transition"):
+            return {
+                "form_type":          FORM_UNKNOWN,
+                "grid_zone":          zone,
+                "str_zone":           STR_ANY,
+                "county_format_hint": COUNTY_ANY,
+                "str_strategy_hint":  STR_STRAT_ANY,
+            }
         return {
             "form_type":          FORM_LATE,
             "grid_zone":          zone,

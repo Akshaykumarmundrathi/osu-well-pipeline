@@ -414,9 +414,32 @@ def process_single_grid(
                      form_info["form_type"], form_info["grid_zone"],
                      form_info["str_zone"], ar_detected)
 
+            # Ground-truth guard (flag, never a gate): compare the detection
+            # against the hand-measured per-collection envelope (2,269 manual
+            # grid boxes).  A bbox whose centre falls outside the envelope
+            # (+2*PAD) is processed normally but flagged — these are the
+            # casing-table-style false positives that pass geometry filters.
+            grid_suspect = False
+            if collection_num:
+                from location.recipes import GRID_ENVELOPES, PAD
+                _env = GRID_ENVELOPES.get(collection_num)
+                if _env is not None:
+                    cx = (bx + bw / 2) / pw
+                    cy = (by + bh / 2) / ph
+                    ex0, ey0, ex1, ey1 = _env
+                    if not (ex0 - 2 * PAD <= cx <= ex1 + 2 * PAD
+                            and ey0 - 2 * PAD <= cy <= ey1 + 2 * PAD):
+                        grid_suspect = True
+                        log.warning(
+                            "GRID SUSPECT: bbox centre (%.2f, %.2f) outside "
+                            "manual envelope %s for collection %s — flagged "
+                            "for review (still processed)",
+                            cx, cy, _env, collection_num)
+
             result.update(
                 detected=True, page=page_num, bbox=list(bbox),
                 method=method, confidence=conf,
+                grid_suspect=grid_suspect,
                 image_path=str(out_path),
                 # Form-type classification — consumed by location + county dispatch
                 form_type=form_info["form_type"],

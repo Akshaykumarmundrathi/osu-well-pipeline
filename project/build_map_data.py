@@ -294,12 +294,12 @@ def build_geojson(dot_csv: Path) -> tuple[dict, int, int]:
     print(f"  {len(rows):,} total rows")
 
     for row in rows:
-        # Skip unresolved sources
-        src = (row.get("resolution_source") or "").strip()
-        if src not in _RESOLVED_SOURCES:
-            n_skipped += 1
-            continue
-
+        # Validity is decided by the COORDINATES (present + inside Oklahoma,
+        # enforced in _dot_latlon) — not by resolution-source vocabulary.
+        # The old _RESOLVED_SOURCES allowlist silently dropped every row whose
+        # source label post-dated the list (county_pinned_*, corrected_*,
+        # direct_latlong, p4_*, centroids): label evolution must never cost
+        # wells. The source string still rides along as a popup property.
         dot_lat, dot_lon = _dot_latlon(row)
         if dot_lat is None:
             n_skipped += 1

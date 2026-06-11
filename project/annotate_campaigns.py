@@ -107,30 +107,6 @@ class App:
         self.prev_form_id = ""
         self._load_prev_from_csv()
 
-    def _load_prev_from_csv(self):
-        """Seed ghosts from the most recent saved row (resume sessions)."""
-        if not self.out_csv.exists():
-            return
-        try:
-            rows = list(csv.DictReader(
-                self.out_csv.open(newline="", encoding="utf-8")))
-            for r in reversed(rows):
-                if r.get("status") != "ok":
-                    continue
-                for bf in BOX_FIELDS.values():
-                    try:
-                        x = float(r[f"{bf}_x_pct"]); y = float(r[f"{bf}_y_pct"])
-                        w = float(r[f"{bf}_w_pct"]); h = float(r[f"{bf}_h_pct"])
-                        self.prev_boxes[bf] = (x, y, w, h)
-                    except (ValueError, KeyError):
-                        continue
-                self.prev_cats = {f: r.get(f, "") for f in CAT_FIELDS.values()
-                                  if r.get(f, "")}
-                self.prev_form_id = r.get("form_id", "")
-                break
-        except Exception:
-            pass
-
         self.info = tk.Label(root, font=("Consolas", 11), anchor="w")
         self.info.pack(fill="x")
         self.canvas = tk.Canvas(root, width=MAX_W, height=MAX_H, bg="#161616")
@@ -158,6 +134,30 @@ class App:
         root.bind("q", self.quit);         root.bind("Q", self.quit)
         root.bind("<Escape>", self.quit)
         self.show()
+
+    def _load_prev_from_csv(self):
+        """Seed ghosts from the most recent saved row (resume sessions)."""
+        if not self.out_csv.exists():
+            return
+        try:
+            rows = list(csv.DictReader(
+                self.out_csv.open(newline="", encoding="utf-8")))
+            for r in reversed(rows):
+                if r.get("status") != "ok":
+                    continue
+                for bf in BOX_FIELDS.values():
+                    try:
+                        x = float(r[f"{bf}_x_pct"]); y = float(r[f"{bf}_y_pct"])
+                        w = float(r[f"{bf}_w_pct"]); h = float(r[f"{bf}_h_pct"])
+                        self.prev_boxes[bf] = (x, y, w, h)
+                    except (ValueError, KeyError):
+                        continue
+                self.prev_cats = {f: r.get(f, "") for f in CAT_FIELDS.values()
+                                  if r.get(f, "")}
+                self.prev_form_id = r.get("form_id", "")
+                break
+        except Exception:
+            pass
 
     # -- display -----------------------------------------------------------
     def show(self):

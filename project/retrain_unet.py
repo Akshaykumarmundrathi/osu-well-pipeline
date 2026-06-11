@@ -49,7 +49,8 @@ WORK      = Path(r"D:\unet_retrain")
 IMG_DIR   = WORK / "images"
 LBL_DIR   = WORK / "labels"
 OLD_CSV   = Path(r"D:\project_outputs_local\dot_annotations.csv")
-NEW_CSV   = Path(r"D:\project_outputs\dot_labels\manual_labels.csv")
+NEW_CSVS  = [Path(r"D:\project_outputs\dot_labels\manual_labels.csv"),
+             Path(r"D:\project_outputs_test1000\dot_labels\manual_labels.csv")]
 BEST      = Path(r"D:\project_modular\unet_best.pth")
 RETRAINED = WORK / "unet_retrained.pth"
 HOLDOUT   = WORK / "holdout.csv"
@@ -60,6 +61,15 @@ HIT_DIST  = 0.06
 
 
 def _load_old() -> list[dict]:
+    """May 2026 human-verified dots — TRAINING DIVERSITY ONLY.
+
+    Measured 2026-06-11: the current unet_best.pth produces near-zero
+    probability on these May-era crops (pred max ~0.0-0.49) while scoring
+    76% on current-pipeline crops — i.e. the May images are a different
+    crop style / distribution and unsuitable as the regression anchor.
+    They remain genuine human ground truth, so they stay in TRAINING as
+    diversity; the anchor comes from _load_anchor() below.
+    """
     out = []
     if not OLD_CSV.exists():
         return out
@@ -71,58 +81,146 @@ def _load_old() -> list[dict]:
             continue
         if p.exists():
             out.append({"image_path": str(p), "x_norm": x, "y_norm": y,
-                        "source": "early", "negative": False})
+                        "source": "may_extra", "negative": False})
+    return out
+
+
+FORM_STRUCTURES = Path(r"D:\project_outputs\form_structures.csv")
+STATUS_SNAPSHOT = Path(r"D:\project_outputs_c2345\ps_final.csv")
+OUTPUT_ROOT     = Path(r"D:\project_outputs")
+ANCHOR_MAX      = 500   # cap pseudo-anchor sample
+
+
+def _load_anchor() -> list[dict]:
+    """Regression anchor: CURRENT-pipeline crops where the live model already
+    detects the dot at high confidence (>=95). Pseudo-labels from production
+    predictions — the retrained model must keep nailing these."""
+    if not FORM_STRUCTURES.exists():
+        return []
+    # NOTE: main.py DELETES grid PNGs after a successful dot stage (S3-era
+    # assumption), so successful-dot crops never survive locally.  We
+    # REGENERATE them: render the page and crop the bbox stored in metadata —
+    # the same crop the production dot prediction ran on.
+    # form_structures mangles bbox geometry across the two historical bbox
+    # conventions — read the RAW [x, y, w, h] from each metadata.json instead.
+    import json
+    out = []
+    for r in csv.DictReader(FORM_STRUCTURES.open(newline="", encoding="utf-8")):
+        if r.get("dot_detected") != "True":
+            continue
+        try:
+            conf = float(r.get("dot_confidence") or 0)
+            x, y = float(r["dot_x_norm"]), float(r["dot_y_norm"])
+        except (KeyError, ValueError):
+            continue
+        if conf < 95:
+            continue
+        coll_raw = r.get("collection") or ""
+        coll = coll_raw.replace(".zip", "")
+        pdf = Path(rf"D:\{coll}") / r.get("year", "") / r.get("month", "") / f"{r['pdf_stem']}.pdf"
+        if not pdf.exists():
+            continue
+        coll_dir = coll_raw.replace(" (", "_").replace(")", "").replace(".zip", "").replace(" ", "_")
+        month_dir = (r.get("month") or "").replace(" - ", "___").replace(" ", "_")
+        meta = (OUTPUT_ROOT / "metadata" / coll_dir / (r.get("year") or "")
+                / month_dir / r["pdf_stem"] / "metadata.json")
+        if not meta.exists():
+            continue
+        try:
+            d = json.loads(meta.read_text(encoding="utf-8"))
+            g = d["stages"]["grid"]
+            gx, gy, gw, gh = [int(v) for v in g["bbox"]]
+            page = int(g.get("page") or 1)
+        except Exception:
+            continue
+        if gw <= 0 or gh <= 0 or gw > 2000:
+            continue
+        out.append({"image_path": "", "pdf_path": str(pdf), "page": page,
+                    "bbox": (gx, gy, gw, gh),
+                    "x_norm": x, "y_norm": y,
+                    "source": "anchor", "negative": False})
+        if len(out) >= ANCHOR_MAX:
+            break
     return out
 
 
 def _load_new() -> list[dict]:
     out = []
-    if not NEW_CSV.exists():
-        return out
     from PIL import Image
-    for r in csv.DictReader(NEW_CSV.open(newline="", encoding="utf-8")):
-        p = Path(r.get("image_path", ""))
-        if not p.exists():
+    for csv_path in NEW_CSVS:
+        if not csv_path.exists():
             continue
-        if r.get("is_grid") == "False" or r.get("dot_count") == "0":
-            out.append({"image_path": str(p), "x_norm": -1, "y_norm": -1,
-                        "source": "new", "negative": True})
-            continue
-        try:
-            x_px, y_px = int(r["x"]), int(r["y"])
-        except (KeyError, ValueError):
-            continue
-        with Image.open(p) as im:
-            w, h = im.size
-        out.append({"image_path": str(p), "x_norm": x_px / w,
-                    "y_norm": y_px / h, "source": "new", "negative": False})
+        for r in csv.DictReader(csv_path.open(newline="", encoding="utf-8")):
+            p = Path(r.get("image_path", ""))
+            if not p.exists():
+                continue
+            if r.get("is_grid") == "False" or r.get("dot_count") == "0":
+                out.append({"image_path": str(p), "x_norm": -1, "y_norm": -1,
+                            "source": "new", "negative": True})
+                continue
+            try:
+                x_px, y_px = int(r["x"]), int(r["y"])
+            except (KeyError, ValueError):
+                continue
+            with Image.open(p) as im:
+                w, h = im.size
+            out.append({"image_path": str(p), "x_norm": x_px / w,
+                        "y_norm": y_px / h, "source": "new", "negative": False})
     return out
 
 
 def prepare() -> None:
     from unet_dot_detector import write_manual_mask, write_empty_mask
-    rows = _load_old() + _load_new()
-    print(f"training pool: {sum(1 for r in rows if r['source']=='early')} early "
-          f"+ {sum(1 for r in rows if r['source']=='new')} new")
+    rows = _load_anchor() + _load_old() + _load_new()
+    print("training pool:",
+          {s: sum(1 for r in rows if r["source"] == s)
+           for s in ("anchor", "may_extra", "new")})
     rng = random.Random(SEED)
     holdout, train = [], []
-    for src in ("early", "new"):
+    # Holdout from anchor (regression gate) and new (improvement gate).
+    # may_extra is training-only diversity — never in the holdout.
+    for src in ("anchor", "new"):
         grp = [r for r in rows if r["source"] == src]
         rng.shuffle(grp)
         k = max(1, int(len(grp) * HOLDOUT_FRAC)) if grp else 0
         holdout += grp[:k]
         train   += grp[k:]
+    train += [r for r in rows if r["source"] == "may_extra"]
 
     for d in (IMG_DIR, LBL_DIR):
         if d.exists():
             shutil.rmtree(d)
         d.mkdir(parents=True)
     from PIL import Image
+
+    def _materialise(r: dict, dst_dir: Path) -> Path | None:
+        """Copy an existing crop, or re-render+crop from pdf/bbox (anchors —
+        main.py deletes grid PNGs after successful dot stages)."""
+        if r.get("image_path"):
+            src = Path(r["image_path"])
+            dst = dst_dir / f"{src.parent.name[:40]}_{src.name}"
+            shutil.copy2(src, dst)
+            return dst
+        try:
+            from pdf.pdf_manager import PDFDocumentManager
+            mgr = PDFDocumentManager(r["pdf_path"], resolution_multiplier=2.0)
+            pil = mgr.get_page_pil(int(r["page"]) - 1)
+            if pil is None:
+                return None
+            gx, gy, gw, gh = r["bbox"]
+            crop = pil.crop((gx, gy, gx + gw, gy + gh))
+            stem = Path(r["pdf_path"]).stem[:50]
+            dst = dst_dir / f"anchor_{stem}_grid.png"
+            crop.save(str(dst))
+            return dst
+        except Exception:
+            return None
+
     n_img = 0
     for r in train:
-        src = Path(r["image_path"])
-        dst = IMG_DIR / f"{src.parent.name[:40]}_{src.name}"
-        shutil.copy2(src, dst)
+        dst = _materialise(r, IMG_DIR)
+        if dst is None:
+            continue
         if r["negative"]:
             write_empty_mask(dst, LBL_DIR)
         else:
@@ -131,6 +229,15 @@ def prepare() -> None:
             write_manual_mask(dst, LBL_DIR,
                               [(int(r["x_norm"] * w), int(r["y_norm"] * h))])
         n_img += 1
+
+    # Materialise holdout crops too (regenerated anchors need real files).
+    for r in holdout:
+        if not r.get("image_path"):
+            dst = _materialise(r, WORK / "holdout_imgs")
+            r["image_path"] = str(dst) if dst else ""
+    holdout = [r for r in holdout if r.get("image_path")]
+    for r in holdout:
+        r.pop("pdf_path", None); r.pop("page", None); r.pop("bbox", None)
     with HOLDOUT.open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=["image_path", "x_norm", "y_norm",
                                           "source", "negative"])
@@ -151,7 +258,7 @@ def _score(ckpt: Path) -> dict:
     model.eval()
     det = DotDetector(model=model, output_dir=WORK / "eval_tmp",
                       threshold=0.50, min_area=8, max_dots=1)
-    stats = {"early": [0, 0], "new": [0, 0]}
+    stats = {"anchor": [0, 0], "new": [0, 0]}
     from PIL import Image
     for r in csv.DictReader(HOLDOUT.open(newline="", encoding="utf-8")):
         if r["negative"] == "True":
@@ -213,10 +320,10 @@ def main() -> None:
         new  = _score(RETRAINED)
         print("baseline :", json.dumps(base))
         print("retrained:", json.dumps(new))
-        early_drop = (base["early"]["rate"] or 0) - (new["early"]["rate"] or 0)
-        new_gain   = (new["new"]["rate"] or 0) - (base["new"]["rate"] or 0)
-        verdict = "PASS" if early_drop <= 0.02 and new_gain > 0 else "FAIL"
-        print(f"early drop: {early_drop:+.3f} (max allowed +0.020)   "
+        anchor_drop = (base["anchor"]["rate"] or 0) - (new["anchor"]["rate"] or 0)
+        new_gain    = (new["new"]["rate"] or 0) - (base["new"]["rate"] or 0)
+        verdict = "PASS" if anchor_drop <= 0.02 and new_gain > 0 else "FAIL"
+        print(f"anchor drop: {anchor_drop:+.3f} (max allowed +0.020)   "
               f"new-style gain: {new_gain:+.3f}   -> {verdict}")
     if args.promote:
         bak = BEST.with_suffix(".pth.pre_retrain_bak")

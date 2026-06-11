@@ -9,13 +9,15 @@ unet_dot_detector.py consumes for retraining (write_manual_mask /
 parse_label_dots), so a labeling session feeds the next training run
 directly.
 
-Controls:
-    Left-click   mark the dot (re-click to move it)
+Controls (PREDICT-then-CORRECT workflow):
+    The model's predicted dot is shown as an ORANGE ring (if it has one).
+    Space/Enter  ACCEPT the prediction as ground truth + next
+                 (with your click instead, saves your correction)
+    Left-click   correct the dot position (overrides prediction)
     Right-click  add an EXTRA dot (multi-dot forms)
     N            grid has NO visible dot          (dot_count=0)
     G            image is NOT actually a grid      (is_grid=False)
-    U            undo all clicks on this image
-    Space/Enter  save label + next image
+    U            undo clicks (prediction stays available)
     S            skip without saving
     Q / Esc      quit (progress saved)
 
@@ -46,7 +48,44 @@ LABEL_DIR   = OUTPUT_ROOT / "dot_labels"
 LABEL_CSV   = LABEL_DIR / "manual_labels.csv"
 
 LABEL_FIELDS = ["image", "image_path", "is_grid", "x", "y",
-                "dot_count", "extra_dots", "form_type", "pdf_stem"]
+                "dot_count", "extra_dots", "form_type", "pdf_stem",
+                "pred_x", "pred_y", "pred_conf", "accepted_pred"]
+
+
+def _load_model():
+    """Load the production U-Net once for prediction overlays."""
+    import sys as _sys
+    _sys.path.insert(0, r"D:\project_modular")
+    import torch
+    from unet_dot_detector import UNet
+    ck = torch.load(r"D:\project_modular\unet_best.pth",
+                    map_location="cpu", weights_only=True)
+    m = UNet(in_channels=1, out_channels=1,
+             features=ck.get("features", [16, 32, 64, 128]))
+    m.load_state_dict(ck["model_state"])
+    m.eval()
+    return m
+
+
+def _predict_dot(model, pil_img) -> tuple[int, int, float] | None:
+    """Best dot guess in original pixels (low threshold — show ANY signal)."""
+    import numpy as np, torch, cv2
+    w, h = pil_img.size
+    gray = pil_img.convert("L").resize((192, 192))
+    t = torch.from_numpy(
+        np.array(gray, dtype=np.float32) / 255.0).unsqueeze(0).unsqueeze(0)
+    with torch.no_grad():
+        pred = model(t).squeeze().numpy()
+    if pred.max() < 0.15:
+        return None
+    binary = (pred >= min(0.30, float(pred.max()) * 0.8)).astype(np.uint8)
+    n, labels, stats, cents = cv2.connectedComponentsWithStats(binary, 8)
+    best = None
+    for i in range(1, n):
+        conf = float(pred[labels == i].mean())
+        if best is None or conf > best[2]:
+            best = (int(cents[i][0] * w / 192), int(cents[i][1] * h / 192), conf)
+    return best
 
 MAX_DISPLAY = 760   # px -- grid PNGs are scaled up to this for clicking
 
@@ -95,6 +134,13 @@ class App:
         self.dots: list[tuple[int, int]] = []   # original-image space
         self.scale = 1.0
         self.saved = 0
+        self.pred  = None
+        try:
+            self.model = _load_model()
+            print("model loaded — predictions will be overlaid")
+        except Exception as exc:
+            print(f"model unavailable ({exc}) — manual labeling only")
+            self.model = None
 
         root.title("Dot inspector")
         self.info = tk.Label(root, font=("Consolas", 11), anchor="w")
@@ -128,6 +174,7 @@ class App:
             return
         item = self.items[self.idx]
         self.dots = []
+        self.pred = None
         img = Image.open(item["path"]).convert("RGB")
         self.orig_size = img.size
         self.scale = min(MAX_DISPLAY / img.width, MAX_DISPLAY / img.height)
@@ -137,8 +184,24 @@ class App:
         self.canvas.delete("all")
         self.canvas.config(width=disp.width, height=disp.height)
         self.canvas.create_image(0, 0, anchor="nw", image=self.tkimg)
+        # Model prediction overlay (orange ring) — accept with Space,
+        # correct with a click, reject with N/G.
+        pred_txt = "pred: none"
+        if self.model is not None:
+            try:
+                self.pred = _predict_dot(self.model, img)
+            except Exception:
+                self.pred = None
+            if self.pred:
+                px, py, pc = self.pred
+                sx, sy = px * self.scale, py * self.scale
+                self.canvas.create_oval(sx - 9, sy - 9, sx + 9, sy + 9,
+                                        outline="orange", width=3,
+                                        tags="pred")
+                pred_txt = f"pred: ({px},{py}) conf={pc:.2f}"
         self.info.config(text=f"[{self.idx + 1}/{len(self.items)}] "
-                              f"{item['form_type']:<12} {item['stem'][:60]}")
+                              f"{item['form_type']:<12} {pred_txt}  "
+                              f"{item['stem'][:45]}")
 
     def draw_dots(self):
         self.canvas.delete("dot")
@@ -169,10 +232,17 @@ class App:
         self.next()
 
     def save_next(self, _=None):
-        if not self.dots:
-            return  # nothing marked -- use N/G/S instead
-        self.write_row(is_grid="True", dots=self.dots,
-                       dot_count=str(len(self.dots)))
+        if self.dots:
+            # User clicked a correction — that wins.
+            self.write_row(is_grid="True", dots=self.dots,
+                           dot_count=str(len(self.dots)))
+        elif self.pred:
+            # No correction → ACCEPT the model's prediction as ground truth.
+            px, py, _ = self.pred
+            self.write_row(is_grid="True", dots=[(px, py)],
+                           dot_count="1", accepted_pred="1")
+        else:
+            return  # nothing to save -- use N/G/S instead
         self.next()
 
     def skip(self, _=None):
@@ -187,12 +257,14 @@ class App:
         self.show()
 
     # -- persistence ------------------------------------------------------------
-    def write_row(self, is_grid: str, dots: list, dot_count: str):
+    def write_row(self, is_grid: str, dots: list, dot_count: str,
+                  accepted_pred: str = ""):
         item = self.items[self.idx]
         LABEL_DIR.mkdir(parents=True, exist_ok=True)
         new_file = not LABEL_CSV.exists()
         x, y = (dots[0] if dots else ("", ""))
         extra = ";".join(f"{ex}:{ey}" for ex, ey in dots[1:])
+        px, py, pc = self.pred if self.pred else ("", "", "")
         with LABEL_CSV.open("a", newline="", encoding="utf-8") as f:
             w = csv.DictWriter(f, fieldnames=LABEL_FIELDS)
             if new_file:
@@ -202,7 +274,10 @@ class App:
                         "is_grid": is_grid, "x": x, "y": y,
                         "dot_count": dot_count, "extra_dots": extra,
                         "form_type": item["form_type"],
-                        "pdf_stem": item["stem"]})
+                        "pdf_stem": item["stem"],
+                        "pred_x": px, "pred_y": py,
+                        "pred_conf": round(pc, 3) if pc != "" else "",
+                        "accepted_pred": accepted_pred})
         self.saved += 1
 
 

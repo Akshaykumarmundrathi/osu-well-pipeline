@@ -1296,6 +1296,45 @@ def _dispatch(stage: str, manager: PDFDocumentManager,
         if grid_dir is None:
             raise ValueError("STAGE_DOT requires grid_dir kwarg")
         _tier = tier_for(getattr(record, "collection_num", None))
+
+        # Regeneration shim: 1,131 C1-era records lost their grid PNGs to the
+        # old unconditional post-dot deletion (and older runs' relocations).
+        # When the PNG is gone but THIS RUN's grid result or the record's
+        # metadata.json still has bbox+page, re-render and crop the identical
+        # image so the dot stage can proceed instead of failing with
+        # grid_image_not_found.
+        if not list(grid_dir.glob(f"{pdf_stem}_page_*_grid.png")):
+            _bbox = _page = None
+            _gres_dot = grid_result if isinstance(grid_result, dict) else {}
+            if _gres_dot.get("bbox") and _gres_dot.get("page"):
+                _bbox, _page = _gres_dot["bbox"], _gres_dot["page"]
+            else:
+                try:
+                    import json as _json
+                    _pb = OutputPathBuilder(output_root)
+                    _meta_p = _pb.metadata_path(record)
+                    _g = (_json.loads(_meta_p.read_text(encoding="utf-8"))
+                          .get("stages", {}).get("grid", {}))
+                    if _g.get("detected") and _g.get("bbox") and _g.get("page"):
+                        _bbox, _page = _g["bbox"], _g["page"]
+                except Exception:
+                    pass
+            if _bbox and _page:
+                try:
+                    _pil = manager.get_page_pil(int(_page) - 1)
+                    if _pil is not None:
+                        _x, _y, _w, _h = [int(v) for v in _bbox]
+                        if 0 < _w <= 2000 and 0 < _h <= 2000:
+                            grid_dir.mkdir(parents=True, exist_ok=True)
+                            _crop = _pil.crop((_x, _y, _x + _w, _y + _h))
+                            _crop.save(str(
+                                grid_dir / f"{pdf_stem}_page_{int(_page):02d}_grid.png"))
+                            log.info("Grid PNG regenerated from stored bbox "
+                                     "for dot stage (page %s, %dx%d)",
+                                     _page, _w, _h)
+                except Exception as _rx:
+                    log.debug("grid PNG regen failed (non-fatal): %s", _rx)
+
         return process_single_dot(
             grid_dir, out_dir, pdf_stem, log,
             tier=_tier,

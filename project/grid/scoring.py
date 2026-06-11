@@ -333,7 +333,35 @@ def process_single_grid(
                 else:
                     grid_img = bbox = method = None
 
-                # Strategy 2: full-page CV scan (fallback).
+                # Strategy 2: hand-measured grid-envelope crop.
+                # The user's manual review drew 2,269 grid boxes across all
+                # collections (location/recipes.py GRID_ENVELOPES).  On forms
+                # like C8 the grid is NESTED inside a wider form-section box:
+                # full-crop extractors return the 600px-wide outer rectangle
+                # (AR-fail) and never isolate the 140px grid.  Cropping to the
+                # measured envelope makes the grid the dominant rectangle.
+                if grid_img is None and collection_num:
+                    from location.recipes import GRID_ENVELOPES, PAD
+                    _env = GRID_ENVELOPES.get(collection_num)
+                    if _env is not None:
+                        _ph, _pw = cv_img.shape[:2]
+                        ex0 = max(0,   int((_env[0] - PAD) * _pw))
+                        ey0 = max(0,   int((_env[1] - PAD) * _ph))
+                        ex1 = min(_pw, int((_env[2] + PAD) * _pw))
+                        ey1 = min(_ph, int((_env[3] + PAD) * _ph))
+                        if ex1 - ex0 > 50 and ey1 - ey0 > 50:
+                            g2, b2, m2 = _extract_best_candidate(
+                                cv_img[ey0:ey1, ex0:ex1],
+                                w_min, w_max, h_min, h_max,
+                                ar_min=ar_min_tier, ar_max=ar_max_tier,
+                            )
+                            if g2 is not None:
+                                bx, by, bw_, bh_ = b2
+                                grid_img = g2
+                                bbox     = (bx + ex0, by + ey0, bw_, bh_)
+                                method   = f"envelope_{m2}"
+
+                # Strategy 3: full-page CV scan (fallback).
                 if grid_img is None:
                     grid_img, bbox, method = _extract_best_candidate(
                         cv_img, w_min, w_max, h_min, h_max,

@@ -275,6 +275,8 @@ class App:
 
     # -- persistence -----------------------------------------------------------
     def _write(self, status: str):
+        if self.idx >= len(self.items):
+            return   # past the end (campaign done screen) — nothing to save
         item = self.items[self.idx]
         row = {k: "" for k in FIELDS}
         row.update(pdf_stem=item["pdf_stem"], pdf_path=item["pdf_path"],

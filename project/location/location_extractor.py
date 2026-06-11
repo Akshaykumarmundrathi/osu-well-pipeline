@@ -836,6 +836,30 @@ def process_single_location(
                 log.info("Location -- quadrant found: pdf=%s db=%s row=%s col=%s",
                          quad_pdf, quad_db, quad_row, quad_col)
 
+            # -- High-res retry for the missing third field --------------------
+            # At 2x render Vision OCR drops small printed labels (measured:
+            # "RGE" vanishes at 2x, reads fine at 2.5x). 59 of 82 unresolved
+            # exposure records were missing the range NUMBER for this reason.
+            # When exactly one field is missing, re-render THIS page at 2.5x
+            # and re-extract once — one extra Vision call per partial record.
+            if found == 2:
+                try:
+                    hi_sec, hi_twp, hi_rng = _hires_retry(
+                        manager, page_num, extend_right, padding_height,
+                        section_right_extension, overlap, log)
+                    sec = sec or hi_sec
+                    twp = twp or hi_twp
+                    rng = rng or hi_rng
+                    new_found = sum(bool(v) for v in (sec, twp, rng))
+                    if new_found > found:
+                        log.info("Hi-res retry recovered missing field: "
+                                 "sec=%s twp=%s rng=%s", sec, twp, rng)
+                        found = new_found
+                        conf  = (found * 100) // 3
+                        strat_used = (strat_used or "") + "+hires"
+                except Exception as exc:
+                    log.debug("Hi-res retry failed (non-fatal): %s", exc)
+
             log.info("Location -- page %d  sec=%s  twp=%s  rng=%s  conf=%d",
                      page_num, sec, twp, rng, conf)
             result.update(
@@ -860,6 +884,47 @@ def process_single_location(
     log.warning("No STR location found")
     result["error"] = "not_found"
     return result
+
+
+def _hires_retry(manager, page_num: int, extend_right: int,
+                 padding_height: int, section_right_extension: int,
+                 overlap: float, log) -> tuple[str, str, str]:
+    """
+    Re-render one page at 2.5x and re-run the cheap OCR strategies.
+
+    Used only when exactly one STR field is missing — the dominant cause is
+    Vision dropping a small printed label (RGE/TWP) at the standard 2x
+    render. Costs one extra Vision call for the single page.
+    """
+    src = manager.pdf_path if manager.pdf_path else None
+    hi = PDFDocumentManager(
+        pdf_path=src,
+        pdf_bytes=None if src else manager._bytes,
+        resolution_multiplier=2.5,
+    )
+    pil = hi.get_page_pil(page_num - 1)   # iter_pil_pages yields 1-indexed
+    if pil is None:
+        return "", "", ""
+    anns = detect_text_with_vision(pil, manager=hi, page_num=page_num)
+    if not anns:
+        return "", "", ""
+    secs, twps, rngs = find_keywords_lists(
+        anns, LOCATION_KEYWORDS, extend_right, padding_height)
+    group = choose_group(secs, twps, rngs, min_overlap=overlap)
+    if group is not None:
+        ub = get_unified_bounding_box(group, section_right_extension)
+        if ub is not None:
+            pw, ph = pil.size
+            x0 = max(0, int(ub[0])); y0 = max(0, int(ub[1]))
+            x1 = min(pw, int(ub[2])); y1 = min(ph, int(ub[3]))
+            if x1 > x0 and y1 > y0:
+                raw = _annotations_in_box(
+                    anns, max(0, x0 - 250), max(0, y0 - 250),
+                    min(pw, x1 + 250), min(ph, y1 + 250))
+                return _extract_str(raw)
+    return _per_keyword_extract(
+        anns, {"section": secs, "township": twps, "range": rngs}, pil.size[0],
+        right_extend=extend_right)
 
 
 # Convenience constants for retry callers.

@@ -202,7 +202,22 @@ class ProcessingStatus:
         """
         self.csv_path  = csv_path
         self._stems_filter = stems_filter
-        self._lock_path = csv_path.with_suffix(".csv.lock")
+
+        # ── Sharded writes (cross-RUN contention fix) ─────────────────────
+        # Concurrent runs against one 130MB file starve each other: every
+        # save merge-rewrites the FULL file holding one advisory lock for
+        # 10-20s.  With STATUS_SHARD_SUFFIX set (one per run), THIS run's
+        # saves go to processing_status.<suffix>.csv — small file, its own
+        # lock, zero cross-run contention.  Loads always read the base file
+        # PLUS every shard (shards override base; newest shard wins) so all
+        # runs see each other's completed work.  consolidate_status.py folds
+        # shards back into the base when no runs are active.
+        _suffix = os.environ.get("STATUS_SHARD_SUFFIX", "").strip()
+        self._base_path = csv_path
+        if _suffix:
+            self.csv_path = csv_path.with_name(
+                csv_path.stem + f".{_suffix}" + csv_path.suffix)
+        self._lock_path = self.csv_path.with_suffix(".csv.lock")
         self._rows: dict[str, dict] = {}
         # Track which stems *this process* has modified — used by _save_locked
         # to merge-write safely when multiple worker processes share the file.
@@ -217,6 +232,30 @@ class ProcessingStatus:
     # -- I/O ------------------------------------------------------------------
 
     def _load(self):
+        """Read base + all shard files (shards override base, newest last)."""
+        sources = []
+        if self._base_path.exists():
+            sources.append(self._base_path)
+        # Other runs' shards + our own from a previous crash.
+        shards = sorted(
+            (p for p in self._base_path.parent.glob(
+                self._base_path.stem + ".*" + self._base_path.suffix)
+             if p != self._base_path and not p.name.endswith(".new")),
+            key=lambda p: p.stat().st_mtime)
+        sources.extend(shards)
+        for src in sources:
+            self._load_one(src)
+
+    def _load_one(self, path: Path):
+        if not path.exists():
+            return
+        _orig, self.csv_path = self.csv_path, path
+        try:
+            self._load_file()
+        finally:
+            self.csv_path = _orig
+
+    def _load_file(self):
         """Read existing rows, fill missing columns from new schema with ''."""
         if not self.csv_path.exists():
             return

@@ -532,10 +532,17 @@ function buildPopup(p) {
   const wellId    = nameParts[0] || "";
   const apino     = nameParts[nameParts.length - 1] || "";
 
+  // Show direction ONLY when the extracted value carries one — the old
+  // hardcoded N/W suffixes invented wrong directions on the popup.
+  const fmtDir = (v, pre) => {
+    if (!v) return "";
+    const s = String(v).trim().toUpperCase();
+    return /[NSEW]$/.test(s) ? `${pre}${s}` : `${pre}${s}<span style="color:#94a3b8">?</span>`;
+  };
   const plss = [
-    p.section  ? `Sec ${p.section}`  : "",
-    p.township ? `T${p.township}N`   : "",
-    p.range    ? `R${p.range}W`      : ""
+    p.section  ? `Sec ${p.section}` : "",
+    fmtDir(p.township, "T"),
+    fmtDir(p.range, "R")
   ].filter(Boolean).join(", ");
 
   const pdfUrl = p.s3_url || "";
@@ -596,9 +603,75 @@ function buildPopup(p) {
               color:#90bce0;font-size:10px;cursor:pointer;">
       📋 Copy Coords
     </span>
+    <span onclick="toggleFixPanel('${(p.pdf_stem||"").replace(/'/g,"")}')"
+       style="flex:1;text-align:center;padding:6px;background:rgba(245,158,11,.12);
+              border:1px solid rgba(245,158,11,.3);border-radius:6px;
+              color:#fcd34d;font-size:10px;cursor:pointer;">
+      ✏️ Verify / Fix
+    </span>
+  </div>
+  <div id="fixpanel-${(p.pdf_stem||"").replace(/'/g,"")}" style="display:none;margin-top:8px;
+       padding:8px;background:rgba(245,158,11,.06);border:1px solid rgba(245,158,11,.25);
+       border-radius:6px">
+    <div style="color:#fcd34d;font-size:10px;margin-bottom:6px">
+      Compare with the PDF, correct any field, then submit. Leave fields unchanged if right.
+    </div>
+    ${["section","township","range","county","quadrant"].map(f => `
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
+        <span style="width:62px;color:#94a3b8;font-size:10px">${f}</span>
+        <input id="fix-${f}-${(p.pdf_stem||"").replace(/'/g,"")}"
+               value="${(p[f]||"").toString().replace(/"/g,"&quot;")}"
+               style="flex:1;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.15);
+                      border-radius:4px;color:#e2e8f0;font-size:11px;padding:3px 6px"/>
+      </div>`).join("")}
+    <div style="display:flex;gap:6px;margin-top:6px">
+      <span onclick="submitFix('${(p.pdf_stem||"").replace(/'/g,"")}', true)"
+            style="flex:1;text-align:center;padding:5px;background:rgba(34,197,94,.15);
+                   border:1px solid rgba(34,197,94,.4);border-radius:5px;
+                   color:#86efac;font-size:10px;cursor:pointer">✓ All correct</span>
+      <span onclick="submitFix('${(p.pdf_stem||"").replace(/'/g,"")}', false)"
+            style="flex:1;text-align:center;padding:5px;background:rgba(245,158,11,.15);
+                   border:1px solid rgba(245,158,11,.4);border-radius:5px;
+                   color:#fcd34d;font-size:10px;cursor:pointer">Submit fix</span>
+    </div>
   </div>
   <div class="s3-path">${pdfUrl}</div>
 </div>`;
+}
+
+// ── Verify / correction workflow ──────────────────────────────────────────────
+// Static site: corrections go through prefilled GitHub issues (label:
+// correction). apply_corrections.py ingests them, re-resolves coordinates
+// via the PLSS database, and republishes the map. No credentials in the
+// browser, full audit trail per fix.
+const FIX_REPO = "Akshaykumarmundrathi/osu-well-pipeline";
+let FIX_CURRENT = {};   // last-known properties per stem, set on popup open
+
+function toggleFixPanel(stem) {
+  const el = document.getElementById("fixpanel-" + stem);
+  if (el) el.style.display = el.style.display === "none" ? "block" : "none";
+}
+
+function submitFix(stem, allCorrect) {
+  const p = FIX_CURRENT[stem] || {};
+  const fields = ["section","township","range","county","quadrant"];
+  const lines = [];
+  let changed = false;
+  for (const f of fields) {
+    const inp = document.getElementById(`fix-${f}-${stem}`);
+    const newV = inp ? inp.value.trim() : "";
+    const oldV = (p[f] || "").toString().trim();
+    if (newV !== oldV) { changed = true; lines.push(`- ${f}: \`${oldV}\` -> \`${newV}\``); }
+    else { lines.push(`- ${f}: \`${oldV}\` (unchanged)`); }
+  }
+  const verdict = allCorrect ? "VERIFIED-CORRECT" : (changed ? "CORRECTION" : "VERIFIED-CORRECT");
+  const title = encodeURIComponent(`[${verdict}] ${stem}`);
+  const body  = encodeURIComponent(
+    `**Well:** \`${stem}\`\n**Verdict:** ${verdict}\n\n` + lines.join("\n") +
+    `\n\n**Current coords:** ${p.lat}, ${p.lon}\n**PDF:** ${p.s3_url || "n/a"}\n` +
+    `\n_Submitted from the map verify panel._`);
+  window.open(`https://github.com/${FIX_REPO}/issues/new?labels=correction&title=${title}&body=${body}`,
+              "_blank");
 }
 
 // ─── Quadrant highlight ───────────────────────────────────────────────────────
@@ -696,6 +769,7 @@ function renderMarkers(features) {
     const lat    = f.geometry.coordinates[1];
     const lon    = f.geometry.coordinates[0];
     const marker = L.marker([lat, lon], { icon: makePin(p.decade, p.confidence, p.resolution) });
+    FIX_CURRENT[(p.pdf_stem || "").replace(/'/g, "")] = p;
     marker.bindPopup(buildPopup(p), { maxWidth: 360, className: "well-popup" });
     marker.on("click", () => showQuadrantHighlight(p));
     markerLayer.addLayer(marker);

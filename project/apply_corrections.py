@@ -46,10 +46,13 @@ _STEM_RE  = re.compile(r"\*\*Well:\*\* `([^`]+)`")
 
 def _gh_token() -> str:
     env = Path(r"D:\project_modular\.env")
+    tokens = {}
     for line in env.read_text(encoding="utf-8").splitlines():
-        if line.startswith("GITHUB_TOKEN="):
-            return line.split("=", 1)[1].strip()
-    return ""
+        for key in ("GITHUB_TOKEN_ISSUES", "GITHUB_TOKEN"):
+            if line.startswith(key + "="):
+                tokens[key] = line.split("=", 1)[1].strip()
+    # Prefer the issues-scope PAT (the push token lacks issues:write).
+    return tokens.get("GITHUB_TOKEN_ISSUES") or tokens.get("GITHUB_TOKEN", "")
 
 
 def _api(path: str, method: str = "GET", payload: dict | None = None) -> object:
@@ -132,15 +135,19 @@ def main() -> None:
         p = by_stem.get(row.get("pdf_stem", ""))
         if not p:
             continue
+        already = True
         for f, newv in p["changes"].items():
             col = field_map.get(f)
             if col and col in row and row[col] != newv:
+                already = False
                 audit_rows.append({"pdf_stem": row["pdf_stem"], "field": col,
                                    "old": row[col], "new": newv,
                                    "issue": p["number"]})
                 row[col] = newv
                 if f in ("section", "township", "range", "quadrant"):
                     str_changed.add(row["pdf_stem"])
+        # Idempotent: a re-run where all values already match still counts
+        # as handled so the issue gets closed.
         applied.add(p["number"])
 
     shutil.copy2(DOT_CSV, DOT_CSV.with_suffix(".csv.corr_bak"))

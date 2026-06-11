@@ -33,6 +33,10 @@ WHAT TO ANNOTATE (the schema answers tonight's open questions):
   Navigation:
     Space/Enter  save + next      U  clear boxes     B  back
     X  unreadable/skip            Q  quit (progress saved)
+    A  SAME AS PREVIOUS — adopts the prior file's boxes + toggles + form id
+       and auto-advances. The previous boxes are shown as gray dashed GHOSTS
+       on every new page: if they line up with this form, just hit A.
+       (Forms repeat for years at a stretch — this is the fast path.)
 
 Usage:
     python annotate_campaigns.py --campaign c8_layout
@@ -91,12 +95,41 @@ class App:
         self.idx = 0
         self.saved = 0
         self.active_box = "grid"
-        self.boxes: dict[str, tuple] = {}     # field -> (x0,y0,x1,y1) pct
+        self.boxes: dict[str, tuple] = {}     # field -> (x,y,w,h) pct
         self.cats: dict[str, str] = {}
         self.form_id = ""
         self.note = ""
         self._drag = None
         self.out_csv = ROOT / campaign / "annotations.csv"
+        # Last SAVED annotation — ghosted onto each new page; key A adopts it.
+        self.prev_boxes: dict[str, tuple] = {}
+        self.prev_cats: dict[str, str] = {}
+        self.prev_form_id = ""
+        self._load_prev_from_csv()
+
+    def _load_prev_from_csv(self):
+        """Seed ghosts from the most recent saved row (resume sessions)."""
+        if not self.out_csv.exists():
+            return
+        try:
+            rows = list(csv.DictReader(
+                self.out_csv.open(newline="", encoding="utf-8")))
+            for r in reversed(rows):
+                if r.get("status") != "ok":
+                    continue
+                for bf in BOX_FIELDS.values():
+                    try:
+                        x = float(r[f"{bf}_x_pct"]); y = float(r[f"{bf}_y_pct"])
+                        w = float(r[f"{bf}_w_pct"]); h = float(r[f"{bf}_h_pct"])
+                        self.prev_boxes[bf] = (x, y, w, h)
+                    except (ValueError, KeyError):
+                        continue
+                self.prev_cats = {f: r.get(f, "") for f in CAT_FIELDS.values()
+                                  if r.get(f, "")}
+                self.prev_form_id = r.get("form_id", "")
+                break
+        except Exception:
+            pass
 
         self.info = tk.Label(root, font=("Consolas", 11), anchor="w")
         self.info.pack(fill="x")
@@ -116,6 +149,7 @@ class App:
             root.bind(k, self.toggle_cat)
         root.bind("f", self.ask_form_id);  root.bind("F", self.ask_form_id)
         root.bind("n", self.ask_note);     root.bind("N", self.ask_note)
+        root.bind("a", self.same_as_prev); root.bind("A", self.same_as_prev)
         root.bind("u", self.clear_boxes);  root.bind("U", self.clear_boxes)
         root.bind("x", self.mark_skip);    root.bind("X", self.mark_skip)
         root.bind("b", self.go_back);      root.bind("B", self.go_back)
@@ -146,6 +180,17 @@ class App:
         self.canvas.delete("all")
         self.canvas.config(width=disp.width, height=disp.height)
         self.canvas.create_image(0, 0, anchor="nw", image=self.tkimg)
+        # Ghost the previous annotation's boxes (dashed) for instant
+        # visual same-format check — hit A to adopt them wholesale.
+        for bf, (x, y, w, h) in self.prev_boxes.items():
+            gx0, gy0 = x * disp.width, y * disp.height
+            gx1, gy1 = (x + w) * disp.width, (y + h) * disp.height
+            self.canvas.create_rectangle(
+                gx0, gy0, gx1, gy1, outline="#999999", width=1,
+                dash=(4, 3), tags="ghost")
+            self.canvas.create_text(
+                gx0 + 3, gy0 - 8, anchor="w", text=bf, fill="#999999",
+                font=("Consolas", 8), tags="ghost")
         self.refresh_labels()
 
     def refresh_labels(self):
@@ -247,8 +292,25 @@ class App:
             w.writerow(row)
         self.saved += 1
 
+    def same_as_prev(self, _=None):
+        """Adopt the previous annotation wholesale and advance."""
+        if not self.prev_boxes:
+            return
+        self.boxes   = dict(self.prev_boxes)
+        self.cats    = dict(self.prev_cats)
+        self.form_id = self.prev_form_id
+        if not self.note:
+            self.note = "same_as_prev"
+        self._write("ok")
+        self.idx += 1
+        self.show()
+
     def save_next(self, _=None):
         self._write("ok")
+        # Remember what was saved — becomes the ghost for the next pages.
+        self.prev_boxes   = dict(self.boxes)
+        self.prev_cats    = dict(self.cats)
+        self.prev_form_id = self.form_id
         self.idx += 1
         self.show()
 

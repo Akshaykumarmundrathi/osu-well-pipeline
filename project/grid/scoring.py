@@ -299,11 +299,17 @@ def process_single_grid(
     if _w_cap:
         w_max = min(w_max, _w_cap)
 
-    # Always iterate FORWARD (page 1 first).  Grid is on the front/first page
-    # for the vast majority of forms across all 13 collections.  Reverse order
-    # caused false-positive detections on back-page elements before reaching
-    # the real grid on page 1.
-    page_order = lambda pages: pages
+    # Iterate FORWARD (page 1 first) for the vast majority of forms — reverse
+    # order caused false positives on back-page elements.  Exception: known
+    # sub-formats whose data lives on a later page (recipes.PAGE_HINTS, e.g.
+    # C12 4-page files carry grid/county/STR on page 3) get that page FIRST,
+    # which also prevents pages 1-2 tables from winning as false positives.
+    from location.recipes import preferred_page_order as _ppo
+
+    def page_order(pages):
+        order = _ppo(collection_num, len(pages))
+        by_num = {p[0]: p for p in pages}
+        return [by_num[n] for n in order if n in by_num]
 
     result = {"detected": False, "page": None, "bbox": None,
               "method": None, "confidence": 0, "image_path": None,

@@ -616,7 +616,20 @@ def process_single_county(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     total_pages = manager.page_count()
-    for page_num in range(min(total_pages, cap)):
+    # Known sub-formats keep county on a later page (e.g. C12 4-page files:
+    # page 3) — try that page first, then the rest in order.
+    from location.recipes import preferred_page_order
+    _order_1idx = preferred_page_order(collection_num, total_pages)
+    _pages_0idx = [p - 1 for p in _order_1idx if p - 1 < min(total_pages, cap)]
+    # Ensure the hinted page is included even when beyond the normal cap.
+    from location.recipes import PAGE_HINTS as _PH
+    _hint = _PH.get(collection_num or 0)
+    if (_hint and total_pages >= _hint["min_pages"]
+            and (_hint["data_page"] - 1) not in _pages_0idx
+            and _hint["data_page"] <= total_pages):
+        _pages_0idx.insert(0, _hint["data_page"] - 1)
+    last_failure: dict | None = None
+    for page_num in _pages_0idx:
         r, found_keyword = _try_page(
             manager, page_num, output_dir, pdf_stem, log,
             crop_scale=crop_scale, full_page_gemini=full_page_gemini,
@@ -647,10 +660,17 @@ def process_single_county(
                 )
                 if r2 is not None and r2.get("detected"):
                     return r2
-                # Full-page also failed — return original crop result so the
-                # caller sees the partial pass1/pass2 evidence for debugging.
-            return r
+                # Full-page also failed — keep the evidence but DO NOT stop:
+                # the keyword may be boilerplate on this page while the real
+                # county sits on a later page (C12 multi-page forms carry
+                # "County: <name>" on page 3; a spurious page-2 'County'
+                # token used to terminate the scan here).
+            if r is not None and r.get("detected"):
+                return r
+            last_failure = r   # remember evidence; try remaining pages
 
+    if last_failure is not None:
+        return last_failure
     log.warning("County keyword not found on first %d page(s)", cap)
     return {
         "detected": False, "page": None,

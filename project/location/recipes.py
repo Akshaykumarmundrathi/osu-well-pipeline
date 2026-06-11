@@ -37,6 +37,9 @@ STR_ENVELOPES: dict[int, tuple[float, float, float, float]] = {
     9:  (0.184, 0.088, 0.496, 0.210),   # n=105
     10: (0.179, 0.127, 0.798, 0.260),   # n=252
     11: (0.164, 0.140, 0.449, 0.258),   # n=147
+    # C12 page-3 layout = C11-style (STR left of top-center grid) per manual
+    # review; C11 envelope reused as approximation.
+    12: (0.164, 0.140, 0.449, 0.258),   # approx (= C11)
 }
 
 # Hand-drawn county boxes.
@@ -53,7 +56,31 @@ COUNTY_ENVELOPES: dict[int, tuple[float, float, float, float]] = {
     9:  (0.036, 0.081, 0.300, 0.212),   # n=105
     10: (0.007, 0.135, 0.239, 0.254),   # n=252
     11: (0.003, 0.140, 0.221, 0.255),   # n=147
+    # C12 page-3 layout = C11-style per manual review; approximation.
+    12: (0.003, 0.140, 0.221, 0.255),   # approx (= C11)
 }
+
+# Page-priority hints — collections whose data lives on a LATER page for a
+# known sub-format.  C12 (2013-18): "latlong-format" files with >=4 pages
+# usually have NO printed lat/lon; page 3 carries grid + county + STR in the
+# familiar top-center-grid / STR-left layout (manual review, Jun 2026).
+# data_page is 1-indexed; applied only when the PDF has >= min_pages pages.
+PAGE_HINTS: dict[int, dict] = {
+    12: {"min_pages": 4, "data_page": 3},
+}
+
+
+def preferred_page_order(collection_num: int | None, n_pages: int) -> list[int]:
+    """1-indexed page order: hinted data page first when the hint applies."""
+    order = list(range(1, n_pages + 1))
+    hint = PAGE_HINTS.get(collection_num or 0)
+    if hint and n_pages >= hint["min_pages"]:
+        dp = hint["data_page"]
+        if dp in order:
+            order.remove(dp)
+            order.insert(0, dp)
+    return order
+
 
 # Hand-drawn grid boxes — useful as a detection prior / false-positive check.
 GRID_ENVELOPES: dict[int, tuple[float, float, float, float]] = {
@@ -68,6 +95,9 @@ GRID_ENVELOPES: dict[int, tuple[float, float, float, float]] = {
     9:  (0.046, 0.134, 0.580, 0.349),   # n=107
     10: (0.141, 0.093, 0.587, 0.940),   # n=253
     11: (0.343, 0.080, 0.934, 0.378),   # n=151
+    # C12 page-3 layout matches C11 (top-center grid) per manual review —
+    # C11 envelope reused as approximation until C12 boxes are drawn.
+    12: (0.343, 0.080, 0.934, 0.378),   # approx (= C11)
 }
 
 

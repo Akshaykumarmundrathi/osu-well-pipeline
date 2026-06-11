@@ -1,0 +1,57 @@
+name: Apply map corrections
+
+# Runs when a verify-panel issue is filed, nightly as a batch, or manually.
+# Patches docs/data/well_locations.json, re-resolves coordinates via the
+# PLSS RDS when STR fields changed, commits, and closes the issues.
+#
+# Required repo secrets for coordinate re-resolution (Settings > Secrets):
+#   RDS_HOST, RDS_DBNAME, RDS_USER, RDS_PASSWORD  (RDS_PORT optional)
+# Without them, field fixes still apply; STR-changed wells get a
+# 'needs-coord-rerun' note instead.
+
+on:
+  issues:
+    types: [opened, edited]
+  schedule:
+    - cron: "0 9 * * *"   # daily batch, 09:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  apply:
+    if: >
+      github.event_name != 'issues' ||
+      startsWith(github.event.issue.title, '[CORRECTION]') ||
+      startsWith(github.event.issue.title, '[VERIFIED-CORRECT]')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: pip install --quiet psycopg2-binary
+
+      - name: Apply corrections
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RDS_HOST: ${{ secrets.RDS_HOST }}
+          RDS_DBNAME: ${{ secrets.RDS_DBNAME }}
+          RDS_USER: ${{ secrets.RDS_USER }}
+          RDS_PASSWORD: ${{ secrets.RDS_PASSWORD }}
+          RDS_PORT: ${{ secrets.RDS_PORT }}
+        run: python scripts/gh_apply_corrections.py
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/data/well_locations.json docs/data/corrections_log.csv
+          git diff --cached --quiet || git commit -m "data: apply map corrections (auto)"
+          git push

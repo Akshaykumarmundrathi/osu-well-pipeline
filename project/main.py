@@ -1061,12 +1061,13 @@ def _process_record_worker(arg):
                     except Exception as _rq_exc:
                         pdf_log.debug("review_queue write failed: %s", _rq_exc)
 
-        # After a SUCCESSFUL dot stage, the grid PNG is no longer needed
-        # locally — it has been uploaded to S3 by the checkpoint thread.
-        # Only delete on success: if dot failed the PNG must survive so that
-        # a resumed run can retry the dot stage without hitting
-        # "grid_image_not_found".
-        if stage == STAGE_DOT and isinstance(r, dict) and r.get("detected"):
+        # After a SUCCESSFUL dot stage the grid PNG can be deleted — but ONLY
+        # when an S3 checkpoint actually holds a copy.  Deleting locally with
+        # no S3 (the old unconditional behaviour) destroyed every successful
+        # dot crop: dot retraining/verification had no positives and old runs
+        # produced 1,146 grid_image_not_found failures on resume.
+        if (stage == STAGE_DOT and isinstance(r, dict) and r.get("detected")
+                and os.environ.get("S3_CHECKPOINT_PREFIX")):
             grid_dir = paths.grids_dir(record)
             for _gp in grid_dir.glob(f"{record.pdf_stem}_page_*_grid.png"):
                 try:

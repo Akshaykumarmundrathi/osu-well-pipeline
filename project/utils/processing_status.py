@@ -188,9 +188,20 @@ def _proc_lock_release(lock_path: Path):
 class ProcessingStatus:
     """In-memory mirror of processing_status.csv with batched writes."""
 
-    def __init__(self, csv_path: Path):
-        """Load existing CSV (if any) into self._rows keyed by pdf_stem."""
+    def __init__(self, csv_path: Path, stems_filter: set[str] | None = None):
+        """Load existing CSV (if any) into self._rows keyed by pdf_stem.
+
+        ``stems_filter`` — when given, only rows whose pdf_stem is in the set
+        are loaded into memory.  SAFE because _save_locked() merge-writes
+        against the on-disk file (never self._rows wholesale), so unloaded
+        rows are preserved verbatim on every save.  Scopes a run to its
+        index: the full file is 514K rows (~13s load); a 3,700-stem run
+        needs only its own rows (<0.5s).  Callers must ensure every stem
+        they will query is in the filter — get_status returns '' (pending)
+        for unloaded stems.
+        """
         self.csv_path  = csv_path
+        self._stems_filter = stems_filter
         self._lock_path = csv_path.with_suffix(".csv.lock")
         self._rows: dict[str, dict] = {}
         # Track which stems *this process* has modified — used by _save_locked
@@ -218,13 +229,33 @@ class ProcessingStatus:
         bad_rows = 0
         with self.csv_path.open(newline="", encoding="utf-8",
                                  errors="replace") as f:
-            for row in csv.DictReader(f):
-                if any(len(v) > 10_000 for v in row.values()):
-                    bad_rows += 1
-                    continue          # drop corrupt row — will be reprocessed
-                full = dict(_EMPTY_ROW)
-                full.update(row)
-                self._rows[full["pdf_stem"]] = full
+            if self._stems_filter is not None:
+                # Fast path: csv.reader + first-column membership test, dict
+                # built only for matching rows (DictReader on every row costs
+                # ~3x more than raw reader on the 514K-row master file).
+                reader = csv.reader(f)
+                header = next(reader, None) or []
+                try:
+                    stem_i = header.index("pdf_stem")
+                except ValueError:
+                    stem_i = 0
+                for vals in reader:
+                    if len(vals) <= stem_i or vals[stem_i] not in self._stems_filter:
+                        continue
+                    if any(len(v) > 10_000 for v in vals):
+                        bad_rows += 1
+                        continue
+                    full = dict(_EMPTY_ROW)
+                    full.update(zip(header, vals))
+                    self._rows[full["pdf_stem"]] = full
+            else:
+                for row in csv.DictReader(f):
+                    if any(len(v) > 10_000 for v in row.values()):
+                        bad_rows += 1
+                        continue      # drop corrupt row — will be reprocessed
+                    full = dict(_EMPTY_ROW)
+                    full.update(row)
+                    self._rows[full["pdf_stem"]] = full
         if bad_rows:
             log.warning(
                 "_load: dropped %d corrupt row(s) from %s "

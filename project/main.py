@@ -1538,9 +1538,16 @@ def run_pipeline(args):
     output_root.mkdir(parents=True, exist_ok=True)
 
     paths  = OutputPathBuilder(output_root)
-    status = ProcessingStatus(output_root / "processing_status.csv")
+    # status is created AFTER the records list is known (see below) so the
+    # CSV load can be scoped to this run's stems — loading all 514K rows
+    # costs ~13s + ~2GB; a run-scoped load is near-instant.  Saves remain
+    # safe: _save_locked merge-writes against the on-disk file.
+    status: ProcessingStatus | None = None
 
-    atexit.register(status.force_save)
+    def _flush_status():
+        if status is not None:
+            status.force_save()
+    atexit.register(_flush_status)
 
     # ── Stop / pause file ────────────────────────────────────────────────────
     # Drop an empty file called STOP (or PAUSE) in the output directory to
@@ -1675,6 +1682,16 @@ def run_pipeline(args):
         i = args.slice_index
         records = [r for idx, r in enumerate(records) if idx % n == i]
         _p(f"  Batch slice {i}/{n}: {len(records):,} records assigned to this job")
+
+    # Run-scoped status load: only this run's stems are read from the CSV.
+    # On the 514K-row master this turns a ~13s/2GB load into a sub-second one
+    # ("hash straight to the unprocessed records").
+    import time as _t
+    _t0 = _t.time()
+    status = ProcessingStatus(output_root / "processing_status.csv",
+                              stems_filter={r.pdf_stem for r in records})
+    _p(f"  Status load: {len(status._rows):,} run-scoped rows "
+       f"in {_t.time() - _t0:.1f}s (full file untouched on disk)")
 
     stages = (args.stage,) if args.stage else ALL_STAGES
     stage_names = " -> ".join(_STAGE_LABEL.get(s, s) for s in stages)

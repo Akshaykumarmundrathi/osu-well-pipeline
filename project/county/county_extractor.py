@@ -344,6 +344,29 @@ def _try_structural_anchor(annotations, kw_box, log,
 
 # -- Per-page logic ------------------------------------------------------------
 
+def _filter_to_region(annotations, region):
+    """Keep token annotations whose bbox centre lies in (x0,y0,x1,y1).
+    Index 0 (full-page blob) is always kept. Returns the original list when
+    region is None or filtering would leave no tokens."""
+    if region is None or not annotations:
+        return annotations
+    x0, y0, x1, y1 = region
+    kept = [annotations[0]]
+    for a in annotations[1:]:
+        poly = a.bounding_poly
+        if not poly or not poly.vertices:
+            continue
+        try:
+            xs = [v.x for v in poly.vertices]
+            ys = [v.y for v in poly.vertices]
+            cx, cy = sum(xs) / len(xs), sum(ys) / len(ys)
+            if x0 <= cx <= x1 and y0 <= cy <= y1:
+                kept.append(a)
+        except Exception:
+            continue
+    return kept if len(kept) > 1 else annotations
+
+
 def _try_page(
     manager: PDFDocumentManager,
     page_num: int,
@@ -353,6 +376,7 @@ def _try_page(
     crop_scale: float = 1.0,
     full_page_gemini: bool = False,
     county_format_hint: str | None = None,
+    collection_num: int | None = None,
 ) -> tuple[dict | None, bool]:
     """
     Attempt county extraction on a single page.
@@ -384,7 +408,22 @@ def _try_page(
                   page_num + 1, word_count)
         return None, False
 
-    kw_box = find_keyword_box(annotations, COUNTY_KEYWORDS)
+    # Prefer the County keyword inside the hand-measured per-collection
+    # envelope (2,262 manually drawn county boxes — location/recipes.py).
+    # The envelope BOUNDS the first search; full page remains the fallback,
+    # so a wrong/missing recipe can never lose a county that's elsewhere.
+    kw_box = None
+    if collection_num is not None:
+        from location.recipes import county_region
+        _region = county_region(collection_num, *pil_image.size)
+        if _region is not None:
+            kw_box = find_keyword_box(
+                _filter_to_region(annotations, _region), COUNTY_KEYWORDS)
+            if kw_box is not None:
+                log.debug("County keyword found inside recipe region "
+                          "(coll %s)", collection_num)
+    if kw_box is None:
+        kw_box = find_keyword_box(annotations, COUNTY_KEYWORDS)
     if kw_box is None:
         log.debug("County keyword not on page %d", page_num + 1)
         return None, False
@@ -555,6 +594,7 @@ def process_single_county(
     full_page_gemini: bool = False,
     max_pages: int | None = None,
     county_format_hint: str | None = None,
+    collection_num: int | None = None,
 ) -> dict:
     """
     Iterate the first `max_pages` (default: MAX_COUNTY_PAGES) until the
@@ -581,6 +621,7 @@ def process_single_county(
             manager, page_num, output_dir, pdf_stem, log,
             crop_scale=crop_scale, full_page_gemini=full_page_gemini,
             county_format_hint=county_format_hint,
+            collection_num=collection_num,
         )
         if found_keyword:
             # Keyword found on this page — inline escalation for no_match.
@@ -602,6 +643,7 @@ def process_single_county(
                     manager, page_num, output_dir, pdf_stem, log,
                     crop_scale=1.0, full_page_gemini=True,
                     county_format_hint=county_format_hint,
+                    collection_num=collection_num,
                 )
                 if r2 is not None and r2.get("detected"):
                     return r2

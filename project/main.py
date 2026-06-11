@@ -1286,6 +1286,7 @@ def _dispatch(stage: str, manager: PDFDocumentManager,
         return process_single_county(
             manager, out_dir, pdf_stem, log,
             county_format_hint=_county_format_hint,
+            collection_num=record.collection_num if record else None,
         )
 
     if stage == STAGE_DOT:

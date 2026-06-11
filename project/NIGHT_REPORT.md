@@ -69,3 +69,30 @@ README live, About + homepage + 10 topics set, REDESIGN.md /
 analyze_test100.py / run_test100.py removed, clutter purged.
 Corrections Action active (first cron sweep 09:00 UTC daily).
 Remember: add RDS_* repo secrets for the Action's coordinate re-resolution.
+
+
+## Architecture insight discovered under load (for next session)
+
+The status CSV's save path is O(file-size) per save and serialized by one
+advisory lock: every month-batch save merge-rewrites the FULL 130MB /
+514K-row file. With 2-3 processes saving, outside writers starve (30s lock
+timeouts) and IO is dominated by rewrites. Today's scoped-LOAD fix solved
+startup; the matching save-side enhancement is per-run sharded status files
+(status.<runid>.csv) consolidated on completion — eliminates lock
+contention entirely and makes saves O(run-size). Recommended before the
+570K cloud run.
+
+
+## ROOT CAUSE OF ALL SILENT DEATHS — FOUND (memory)
+
+This machine has **7.4GB RAM**. Every "silent freeze/death" today and
+historically (resume5's 4-hour freeze, the month-boundary deaths) is
+memory exhaustion: 2 concurrent runs = 5+ python processes (CSV parses,
+torch, OpenCV, PDF renders) exhaust commit charge and Windows kills them
+without any log entry. Observed 1.1GB free during the last double-death;
+single-run sessions (2 workers) historically survived 4+ hours.
+
+**Operating rule now enforced: ONE pipeline run at a time locally**
+(run_chain.bat sequences redo -> regen automatically; META v7 watches
+free memory and chain completion). Cloud is unaffected — each Fargate
+task gets its own 2GB.

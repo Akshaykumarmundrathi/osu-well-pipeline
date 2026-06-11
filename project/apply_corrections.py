@@ -44,15 +44,50 @@ _FIELD_RE = re.compile(r"^- (section|township|range|county|quadrant): `([^`]*)` 
 _STEM_RE  = re.compile(r"\*\*Well:\*\* `([^`]+)`")
 
 
+def _gh_token() -> str:
+    env = Path(r"D:\project_modular\.env")
+    for line in env.read_text(encoding="utf-8").splitlines():
+        if line.startswith("GITHUB_TOKEN="):
+            return line.split("=", 1)[1].strip()
+    return ""
+
+
+def _api(path: str, method: str = "GET", payload: dict | None = None) -> object:
+    import urllib.request
+    req = urllib.request.Request(
+        f"https://api.github.com{path}", method=method,
+        data=json.dumps(payload).encode() if payload else None,
+        headers={"Accept": "application/vnd.github+json",
+                 "Authorization": f"Bearer {_gh_token()}",
+                 "User-Agent": "osu-well-pipeline"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.loads(r.read().decode() or "null")
+
+
 def fetch_issues() -> list[dict]:
-    out = subprocess.run(
-        ["gh", "issue", "list", "--repo", REPO, "--label", "correction",
-         "--state", "open", "--json", "number,title,body"],
-        capture_output=True, text=True)
-    if out.returncode != 0:
-        print("gh failed:", out.stderr[:200])
+    """Open issues that look like verify-panel submissions.
+
+    Matched by TITLE prefix ([CORRECTION] / [VERIFIED-CORRECT]) rather than
+    label — GitHub silently drops URL-prefilled labels that don't exist in
+    the repo, and non-collaborator submitters can't apply labels anyway.
+    """
+    try:
+        issues = _api(f"/repos/{REPO}/issues?state=open&per_page=100")
+    except Exception as exc:
+        print("GitHub API failed:", str(exc)[:200])
         return []
-    return json.loads(out.stdout or "[]")
+    out = []
+    for i in issues:
+        if "pull_request" in i:
+            continue
+        title = i.get("title", "")
+        labels = {l["name"] for l in i.get("labels", [])}
+        if ("correction" in labels
+                or title.startswith("[CORRECTION]")
+                or title.startswith("[VERIFIED-CORRECT]")):
+            out.append({"number": i["number"], "title": title,
+                        "body": i.get("body", "")})
+    return out
 
 
 def parse_issue(issue: dict) -> dict | None:
@@ -136,9 +171,13 @@ def main() -> None:
             msg = ("Applied to the dataset — the map will update on the next publish. Thanks!"
                    if p["number"] in applied else
                    "Recorded as verified-correct. Thanks for checking!")
-            subprocess.run(["gh", "issue", "close", str(p["number"]),
-                            "--repo", REPO, "--comment", msg],
-                           capture_output=True)
+            try:
+                _api(f"/repos/{REPO}/issues/{p['number']}/comments",
+                     "POST", {"body": msg})
+                _api(f"/repos/{REPO}/issues/{p['number']}",
+                     "PATCH", {"state": "closed"})
+            except Exception as exc:
+                print(f"  close #{p['number']} failed: {str(exc)[:80]}")
     print("issues closed.")
 
 

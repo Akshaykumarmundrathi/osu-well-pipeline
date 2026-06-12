@@ -72,6 +72,38 @@ _S3_BUCKET = os.environ.get("S3_BUCKET", "osu-well-records-225989338968")
 _S3_REGION = os.environ.get("S3_REGION", "us-east-1")
 
 
+# ── Stem → (collection, year, month) backfill index ─────────────────────────────
+# Some coordinate sources (C2 redo/regen shards, county-pinned re-resolutions)
+# drop collection/year/month from dot_coordinates.csv. Without those three the
+# S3 PDF URL can't be built and the map shows "PDF not yet on S3" even though the
+# PDF IS on S3. We recover them by pdf_stem from dataset_index.csv (authoritative,
+# one row per source PDF), falling back to processing_status.csv.
+_STEM_META: dict | None = None
+
+def _load_stem_meta(output_root: Path) -> dict:
+    global _STEM_META
+    if _STEM_META is not None:
+        return _STEM_META
+    _STEM_META = {}
+    csv.field_size_limit(2_000_000)
+    for fname in ("dataset_index.csv", "processing_status.csv"):
+        path = output_root / fname
+        if not path.exists():
+            continue
+        try:
+            with path.open(newline="", encoding="utf-8", errors="replace") as f:
+                for r in csv.DictReader(f):
+                    st = r.get("pdf_stem") or r.get("stem") or ""
+                    coll, yr, mo = (r.get("collection", ""), r.get("year", ""),
+                                    r.get("month", ""))
+                    if st and coll and yr and mo and st not in _STEM_META:
+                        _STEM_META[st] = (coll, yr, mo)
+        except Exception as exc:
+            print(f"  WARNING: stem-meta load failed for {path.name}: {exc}")
+    print(f"  Stem-meta backfill index: {len(_STEM_META):,} stems")
+    return _STEM_META
+
+
 # ── S3 URL helpers ──────────────────────────────────────────────────────────────
 
 def _collection_num(raw: str) -> str:
@@ -214,6 +246,15 @@ def _build_feature(row: dict, dot_lat: float, dot_lon: float) -> dict:
     collection_raw  = _str(row.get("collection"))
     dot_conf        = _pct(row.get("dot_confidence"))
 
+    # Backfill missing collection/year/month from the stem index so the S3 URL
+    # can be built (the PDF exists; only this metadata was dropped upstream).
+    if not (collection_raw and year and month) and _STEM_META:
+        meta = _STEM_META.get(stem)
+        if meta:
+            collection_raw = collection_raw or meta[0]
+            year           = year or meta[1]
+            month          = month or meta[2]
+
     props = {
         # Identity
         "well_name":          _well_name(stem),
@@ -286,6 +327,9 @@ def build_geojson(dot_csv: Path) -> tuple[dict, int, int]:
     """
     features  = []
     n_skipped = 0
+
+    # Build the stem→meta backfill index from the same output root as dot_csv.
+    _load_stem_meta(dot_csv.parent)
 
     print(f"Reading {dot_csv} ...")
     with dot_csv.open(newline="", encoding="utf-8") as f:

@@ -646,7 +646,7 @@ function buildPopup(p) {
                    color:#fcd34d;font-size:10px;cursor:pointer">Submit fix</span>
     </div>
   </div>
-  <div class="s3-path">${pdfUrl}</div>
+  <div class="s3-path">${pdfUrl ? "Original scanned record available" : ""}</div>
 </div>`;
 }
 
@@ -679,7 +679,7 @@ function submitFix(stem, allCorrect) {
   const title = encodeURIComponent(`[${verdict}] ${stem}`);
   const body  = encodeURIComponent(
     `**Well:** \`${stem}\`\n**Verdict:** ${verdict}\n\n` + lines.join("\n") +
-    `\n\n**Current coords:** ${p.lat}, ${p.lon}\n**PDF:** ${p.s3_url || "n/a"}\n` +
+    `\n\n**Current coords:** ${p.lat}, ${p.lon}\n**Record:** \`${stem}\`\n` +
     `\n_Submitted from the map verify panel._`);
   window.open(`https://github.com/${FIX_REPO}/issues/new?labels=correction&title=${title}&body=${body}`,
               "_blank");

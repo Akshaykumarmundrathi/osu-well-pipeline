@@ -90,8 +90,11 @@ def _predict_dot(model, pil_img) -> tuple[int, int, float] | None:
 MAX_DISPLAY = 760   # px -- grid PNGs are scaled up to this for clicking
 
 
-def load_candidates(form_type: str, status: str, limit: int) -> list[dict]:
-    """Records matching the form-type + dot-status filter that have a grid PNG."""
+def load_candidates(form_type: str, status: str, limit: int,
+                    collection: str = "") -> list[dict]:
+    """Records matching the form-type + dot-status (+ collection) filter that
+    have a grid PNG. `collection` is a bare number like "2" matching the
+    "(2)" suffix of the collection field."""
     done = set()
     if LABEL_CSV.exists():
         with LABEL_CSV.open(newline="", encoding="utf-8") as f:
@@ -104,12 +107,15 @@ def load_candidates(form_type: str, status: str, limit: int) -> list[dict]:
     snap = LABEL_DIR / "_status_snapshot.csv"
     shutil.copy2(STATUS_CSV, snap)
 
+    coll_tag = f"({collection})" if collection else ""
     out = []
     with snap.open(newline="", encoding="utf-8", errors="replace") as f:
         for r in csv.DictReader(f):
             if status != "any" and r.get("dot_status") != status:
                 continue
             if form_type != "any" and r.get("grid_form_type") != form_type:
+                continue
+            if coll_tag and coll_tag not in (r.get("collection") or ""):
                 continue
             gp = (r.get("grid_image_path") or "").strip()
             if not gp:
@@ -288,11 +294,15 @@ def main() -> None:
     ap.add_argument("--status", default="failed",
                     help="dot_status filter (failed/done/any)")
     ap.add_argument("--limit", type=int, default=200)
+    ap.add_argument("--collection", default="",
+                    help="bare collection number to filter to, e.g. 2 for C2")
     args = ap.parse_args()
 
-    items = load_candidates(args.form_type, args.status, args.limit)
+    items = load_candidates(args.form_type, args.status, args.limit,
+                            args.collection)
     print(f"{len(items)} unlabeled candidates "
-          f"(form_type={args.form_type}, dot_status={args.status})")
+          f"(form_type={args.form_type}, dot_status={args.status}"
+          f"{', C'+args.collection if args.collection else ''})")
     if not items:
         return
     root = tk.Tk()

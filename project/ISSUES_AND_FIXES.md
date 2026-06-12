@@ -151,3 +151,24 @@ PNGs are the biggest).
 **Decision needed before cloud run:** keep crops, drop full-page annotated
 PNGs at scale (or sample them, e.g. 1-in-50) → ~1.1 TB → ~100 GB.
 Disk watchdog already prunes at 4 GB inside Batch containers.
+
+
+## P11 — C2-era wells marked with hollow CIRCLES, not dots (530 records)
+
+**Evidence (Jun-12):** 530 C2 dot failures; U-Net max activation <0.15 on
+58/60 sampled (model literally blind to them). Visual inspection: 1926-40
+forms mark the well with a small hollow "o"/"O", sometimes typed — the
+model was trained exclusively on filled ink dots. Forms also carry a
+PRINTED circle at grid centre (decoy) and "160" acreage labels whose 0/6
+loops are circle-shaped.
+
+**CV fallback attempted and REJECTED:** Hough + ring-contrast guards both
+failed visual verification (circled digit zeros, smudges, empty cells —
+2 rounds of overlay review). The well-circle vs printed-zero distinction
+is semantic; pure geometry can't make it safely.
+
+**Fix path:** U-Net round-2 with circle-style labels. The 530 retained C2
+grid crops are ideal labeling material (clean, distinct marks).
+~120-150 human clicks via inspect_dots.py (predict-then-correct) gives the
+training set; retrain_unet.py gate protects existing accuracy.
+**HUMAN ASK: one C2 labeling session (~20-30 min).**

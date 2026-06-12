@@ -64,7 +64,7 @@ output files plus a row in `processing_status.csv`.
 |-------|-----------------|--------------|
 | `latlong` | `TIER_CONFIG[tier]["run_latlong"]` = True (late/modern only) | `latlong/extractor.process_single_latlong()` |
 | `grid` | Always | `grid/scoring.process_single_grid()` |
-| `location` | `TIER_CONFIG[tier]["run_location"]` = True (mid/late/modern) | `location/extractor.process_single_location()` |
+| `location` | `TIER_CONFIG[tier]["run_location"]` = True (ALL tiers; per-page illegibility guard in the extractor) | `location/extractor.process_single_location()` |
 | `county` | Always | `county/extractor.process_single_county()` |
 | `dot` | After grid: `grid_status == done` | `dot/dot_detector.process_single_dot()` |
 

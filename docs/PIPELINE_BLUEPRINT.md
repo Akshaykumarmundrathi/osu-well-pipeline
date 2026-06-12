@@ -78,10 +78,18 @@
 ```
 
 **Stage skip rules:**
-- `latlong` skipped for early/transition tiers (no lat/lon on form)
-- `grid` + `location` skipped when lat/lon was found (this run or prior)
-- `location` skipped for early/transition tiers (handwritten, unreadable by Tesseract)
-- `dot` skipped when grid was not detected (no image to run on)
+- `latlong` skipped when the collection's measured prior is < 5% (C1-C11;
+  only C12-C13 print lat/lon often enough to be worth the OCR)
+- `grid` + `location` skipped ONLY when lat/lon was actually FOUND (this run
+  or prior) — a "latlong-format" collection does NOT guarantee lat/lon is
+  present; files without it proceed through grid/STR/county normally
+  (C12 multi-page variants route to page 3 via PAGE_HINTS)
+- `location` is attempted for ALL tiers (run_location=True everywhere).
+  A per-page illegibility guard (≥15 OCR tokens) skips truly blank or
+  unreadable PAGES — never a blanket tier skip. (The old early-tier skip
+  silently lost 698 records and was removed.)
+- `dot` skipped when grid was not detected; if the grid PNG was deleted
+  but bbox is stored, the crop is regenerated on the fly
 
 ---
 
@@ -164,8 +172,12 @@ marked `failed` with `error_type=not_found`.
 
 **When run:** Always (all tiers), UNLESS lat/lon was found this run.
 
-**Input:** `PDFDocumentManager`, pages scanned in **reverse** order (grid is usually on
-back page of the record sheet).
+**Input:** `PDFDocumentManager`, pages scanned **FORWARD (page 1 first)** — the grid
+sits on the FIRST page for the vast majority of forms across all 13 collections.
+(Reverse-order scanning was removed: it produced false-positive detections on
+back-page tables before reaching the real grid.) Exception: known multi-page
+sub-formats (recipes.PAGE_HINTS — e.g. C12 files ≥4 pages carry grid/county/STR
+on page 3) get their data page tried first.
 
 **Algorithm (6 CV methods tried in order):**
 ```
@@ -213,7 +225,9 @@ GRID_W_LOOSE  = (150, 1200) px  GRID_H_LOOSE  = (150, 1200) px
 
 ### Stage 3 — Location / STR (`location/location_extractor.py`)
 
-**When run:** Mid/Late/Modern tiers only. Early/transition skip (handwritten, unreadable).
+**When run:** ALL tiers. Per-page illegibility guard (ILLEGIBLE_WORD_THRESHOLD=15
+OCR tokens) skips unreadable pages individually; printed SEC/TWP/RGE labels on
+early forms extract fine even when the VALUES are handwritten.
 
 **Input:** `PDFDocumentManager`, all pages.
 

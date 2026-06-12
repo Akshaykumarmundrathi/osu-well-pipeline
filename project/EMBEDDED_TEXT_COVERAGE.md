@@ -50,3 +50,18 @@ Honest signal = a FILLED value in the layer, not blank-form template or address 
 - **C12** `017245320002_BEARD 34-13N-9W 1H_500259860` -> county **CANADIAN** -- `July 30, 2013 1 of 3 OTC Prod. Unit No.: 017210592 Amended Completion Report Well Name: BEARD 34-13N-9W 1H Min Gas Allowable: Yes Purchaser/Measurer: DEVON GAS SERVICES First Sales Date: 05/24/2013 Th`
 - **C13** `011241120000_OPPEL 1610 5H-24X_500828599` -> county **BLAINE** -- `OTC Prod. Unit No.: 011-225507-0-0000 Completion Report Well Name: OPPEL 1610 5H-24X Min Gas Allowable: Yes Purchaser/Measurer: MUSTANG GAS PRODUCTS  LLC First Sales Date: 4/28/19 Depth Plug Type Ther`
 - **C13** `137276080000_AOSU 3-24_500902392` -> county **STEPHENS** -- `OTC Prod. Unit No.:  Completion Report Well Name: AOSU 3-24 Purchaser/Measurer:  First Sales Date:  Depth Plug Type There are no Plug records to display. API No.: 35137276080000 X Single Zone Multiple`
+# Embedded-text vs Vision agreement (can a free tier skip Vision?)
+
+Agreement = embedded-text extraction matches the Vision-verified value.
+  • cty got/agree = county extracted / of those, matched Vision exactly
+  • STR got/full  = STR extracted / of those, all 3 fields matched
+  • STR field acc = per-field (sec,twp,rng) accuracy among extracted
+
+| coll | n | cty got | cty agree(of got) | STR got | STR full(of got) | STR field acc |
+|--|--|--|--|--|--|--|
+| C1 | 120 | 22% | 0% | 9% | 0% | 12% |
+| C2 | 120 | 25% | 0% | 15% | 0% | 22% |
+| C3 | 120 | 23% | 0% | 17% | 0% | 15% |
+| C4 | 119 | 43% | 0% | 36% | 2% | 28% |
+| C5 | 120 | 43% | 0% | 40% | 0% | 23% |
+| C10 | 3 | 100% | 0% | 100% | 0% | 0% |

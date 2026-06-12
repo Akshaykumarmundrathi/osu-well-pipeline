@@ -97,11 +97,17 @@ def main() -> None:
         for r in csv.DictReader(f):
             paths[r.get("pdf_stem", "")] = r.get("pdf_path", "")
 
+    # Only records with a Vision ground-truth value are useful here. Sample from
+    # the done-pool (county or location), else agreement can never be measured.
     by = defaultdict(list)
     with MASTER.open(newline="", encoding="utf-8", errors="replace") as f:
         for r in csv.DictReader(f):
             m = re.search(r"\((\d+)\)", r.get("collection", ""))
             if not m:
+                continue
+            has_cty = r.get("county_status") == "done" and r.get("county_name")
+            has_loc = r.get("location_status") == "done"
+            if not (has_cty or has_loc):
                 continue
             r["_c"] = int(m.group(1))
             by[r["_c"]].append(r)
@@ -110,7 +116,8 @@ def main() -> None:
     for c, rs in sorted(by.items()):
         rng.shuffle(rs)
         records.extend(rs[:args.per_collection])
-    print(f"validate sample: {len(records)} records")
+    pools = {c: len(rs) for c, rs in sorted(by.items())}
+    print(f"validate sample: {len(records)} records from done-pools {pools}")
 
     stats = defaultdict(lambda: defaultdict(int))
     for i, r in enumerate(records):

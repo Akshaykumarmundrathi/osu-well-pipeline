@@ -2,7 +2,7 @@
 
 **570,953 scanned oil & gas well documents (1911–2024) → structured, mapped, verifiable geographic data.**
 
-🗺️ **[Live interactive map](https://akshaykumarmundrathi.github.io/osu-well-pipeline/)** — every extracted well, hover for details, open the original scanned record, submit corrections inline.
+🗺️ **[Live interactive map](https://akshaykumarmundrathi.github.io/osu-well-pipeline/)** — **4,879 wells mapped** (growing as eras are processed), hover for details, open the original scanned record, submit corrections inline.
 
 ---
 

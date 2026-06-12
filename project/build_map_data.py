@@ -665,6 +665,30 @@ def main():
     if n_feat == 0:
         print("WARNING: no resolved records found — GeoJSON will be empty.")
 
+    # ── Step 1b: preserve human-verified marks from the previous GeoJSON ──────
+    # The corrections GitHub Action writes `verified: "human"` directly into
+    # well_locations.json ([VERIFIED-CORRECT] issues). dot_coordinates.csv has
+    # no such column, so a rebuild would silently erase those marks. Carry them
+    # forward by pdf_stem.
+    if out_json.exists():
+        try:
+            prior = json.loads(out_json.read_text(encoding="utf-8"))
+            prior_verified = {
+                f["properties"].get("pdf_stem"): f["properties"]["verified"]
+                for f in prior.get("features", [])
+                if f["properties"].get("verified")
+            }
+            carried = 0
+            for f in geojson["features"]:
+                v = prior_verified.get(f["properties"].get("pdf_stem"))
+                if v:
+                    f["properties"]["verified"] = v
+                    carried += 1
+            if carried:
+                print(f"  Carried forward {carried} human-verified mark(s).")
+        except Exception as exc:
+            print(f"  WARNING: could not read prior GeoJSON for verified marks: {exc}")
+
     # ── Step 2: write well_locations.json ─────────────────────────────────────
     out_json.parent.mkdir(parents=True, exist_ok=True)
     with out_json.open("w", encoding="utf-8") as f:

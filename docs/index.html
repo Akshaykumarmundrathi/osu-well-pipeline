@@ -313,6 +313,10 @@
         <div class="stat-box"><div class="val" id="stat-approx">—</div><div class="lbl">Approx ◎</div></div>
       </div>
 
+      <!-- Resolution source breakdown -->
+      <div class="section-label">Coordinate Sources</div>
+      <div id="source-breakdown" style="font-size:10px;color:#4a6070;line-height:1.8"></div>
+
       <!-- Filters -->
       <div class="section-label">Filter Wells</div>
       <input type="text" id="search-county" placeholder="🔍 County name...">
@@ -325,6 +329,12 @@
         <option value="p4_quadrant_direct">Pass 4 — Lease Inferred (precise)</option>
         <option value="section_centroid">Section Centroid (approx ±½ mi)</option>
         <option value="p3_">Pass 3 — County Inferred (precise)</option>
+      </select>
+      <select id="filter-flags">
+        <option value="">Flags: show all</option>
+        <option value="clean">Hide flagged wells</option>
+        <option value="flagged">Only flagged wells</option>
+        <option value="verified">Only human-verified ✅</option>
       </select>
       <button class="filter-btn" onclick="applyFilters()">Apply Filters</button>
       <button class="reset-btn" onclick="resetFilters()">↺ Reset All Filters</button>
@@ -583,6 +593,7 @@ function buildPopup(p) {
   <div class="popup-row"><span class="lbl">Resolution</span><span class="val">${p.resolution || "—"}</span></div>
   <div class="popup-row"><span class="lbl">AI Confidence</span><span class="val ${confClass(p.confidence)}">${p.confidence}%</span></div>
   ${p.flags ? `<div class="popup-row"><span class="lbl">Flags</span><span class="val warn">${p.flags}</span></div>` : ""}
+  ${p.verified ? `<div class="popup-row"><span class="lbl">Verified</span><span class="val" style="color:#27ae60;font-weight:700">✅ Human-verified</span></div>` : ""}
 </div>
 <div class="popup-footer">
   ${pdfUrl
@@ -794,6 +805,40 @@ function updateStats(features) {
   document.getElementById("stat-precise").textContent  = precise.toLocaleString();
   document.getElementById("stat-approx").textContent   = approx.toLocaleString();
   document.getElementById("well-count-badge").textContent = `${features.length.toLocaleString()} Wells`;
+  renderSourceBreakdown(features);
+}
+
+// Group raw resolution labels into reader-friendly buckets
+const SOURCE_BUCKETS = [
+  ["quadrant_direct",      "Quadrant direct (precise)"],
+  ["p4_",                  "Lease-inferred quadrant (precise)"],
+  ["county_pinned",        "County-pinned direction fix"],
+  ["section_centroid",     "Section centroid (approx)"],
+  ["direct_latlong",       "Direct lat/lon on form"],
+  ["corrected",            "User-corrected via map"],
+  ["p3_",                  "County-inferred (precise)"],
+];
+function renderSourceBreakdown(features) {
+  const counts = {};
+  let other = 0;
+  features.forEach(f => {
+    const r = (f.properties.resolution || "unknown").toLowerCase();
+    const bucket = SOURCE_BUCKETS.find(([pre]) => r.startsWith(pre));
+    if (bucket) counts[bucket[1]] = (counts[bucket[1]] || 0) + 1;
+    else other++;
+  });
+  const total = features.length || 1;
+  const rows = SOURCE_BUCKETS
+    .filter(([,label]) => counts[label])
+    .map(([,label]) => {
+      const n = counts[label];
+      const pct = Math.round(n * 1000 / total) / 10;
+      return `<div style="display:flex;justify-content:space-between;gap:6px">
+        <span>${label}</span><span style="color:#5a8090;font-weight:700">${n.toLocaleString()} · ${pct}%</span></div>`;
+    });
+  if (other) rows.push(`<div style="display:flex;justify-content:space-between;gap:6px">
+        <span>Other</span><span style="color:#5a8090;font-weight:700">${other.toLocaleString()}</span></div>`);
+  document.getElementById("source-breakdown").innerHTML = rows.join("") || "—";
 }
 
 function buildLegend() {
@@ -844,6 +889,7 @@ function applyFilters() {
   const col     = document.getElementById("filter-collection").value;
   const decade  = document.getElementById("filter-decade").value;
   const resol   = document.getElementById("filter-resolution").value;
+  const flagSel = document.getElementById("filter-flags").value;
   const qs      = quickSearchVal.toLowerCase().trim();
 
   const filtered = allFeatures.filter(f => {
@@ -853,6 +899,9 @@ function applyFilters() {
     if (col    && p.collection !== col)                                                      return false;
     if (decade && p.decade !== decade)                                                       return false;
     if (resol  && !(p.resolution||"").toLowerCase().includes(resol))                         return false;
+    if (flagSel === "clean"    && p.flags)                                                   return false;
+    if (flagSel === "flagged"  && !p.flags)                                                  return false;
+    if (flagSel === "verified" && !p.verified)                                               return false;
     if (well   && ![(p.well_name||""),(p.pdf_stem||"")].some(s=>s.toLowerCase().includes(well))) return false;
     if (qs     && ![(p.well_name||""),(p.county||""),(p.pdf_stem||"")].some(s=>s.toLowerCase().includes(qs))) return false;
     return true;
@@ -865,7 +914,7 @@ function applyFilters() {
 
 function resetFilters() {
   ["search-county","search-wellname","quick-search"].forEach(id => document.getElementById(id).value = "");
-  ["filter-collection","filter-decade","filter-resolution"].forEach(id => document.getElementById(id).value = "");
+  ["filter-collection","filter-decade","filter-resolution","filter-flags"].forEach(id => document.getElementById(id).value = "");
   hiddenDecades.clear();
   quickSearchVal = "";
   document.querySelectorAll(".legend-row").forEach(r => r.classList.remove("hidden-decade"));

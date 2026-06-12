@@ -96,3 +96,22 @@ single-run sessions (2 workers) historically survived 4+ hours.
 (run_chain.bat sequences redo -> regen automatically; META v7 watches
 free memory and chain completion). Cloud is unaffected — each Fargate
 task gets its own 2GB.
+
+
+## FINAL TALLY (block close-out)
+
+| Metric | start | end |
+|---|---|---|
+| Wells on live map | 1,615 | **4,792** (+197%) |
+| C1 dot success | 70% | **98%** (deleted-PNG era regenerated) |
+| Resume startup | 12.6s | 2.1s |
+| Concurrent-run safety | none | sharded saves + watchdog + 1-run rule |
+
+Self-healing watchdog (run_watchdog.bat) continues the remaining redo +
+regen work unattended: auto-relaunches on any death, keep-awake armed,
+single-run memory rule, progress monotonic via shards. When its
+CHAIN_DONE.marker appears: `python consolidate_status.py` then re-run
+the enrichment+map cycle for the final increment.
+
+Environment truths (laptop): 7.4GB RAM (one run max), Modern Standby +
+dirty reboot at 07:30 (event 41), system clock was wrong post-reboot.

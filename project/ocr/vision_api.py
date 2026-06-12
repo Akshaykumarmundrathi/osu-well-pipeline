@@ -39,6 +39,44 @@ _TESS_CONFIG = "--psm 3 --oem 1"
 # Tesseract backend
 # ---------------------------------------------------------------------------
 
+def _tesserocr_annotations(image: PILImage.Image) -> list:
+    """
+    Tesseract via the tesserocr C-API binding (no tesseract.exe needed —
+    the wheel bundles the engine). Activated when TESSEROCR_DATA points at
+    a tessdata directory. Same annotation duck-type as Vision.
+    """
+    tessdata = os.environ.get("TESSEROCR_DATA", "")
+    try:
+        from tesserocr import PyTessBaseAPI, RIL, iterate_level
+    except ImportError:
+        return []
+    word_anns, full_parts = [], []
+    try:
+        with PyTessBaseAPI(path=tessdata) as api:
+            api.SetImage(image.convert("RGB"))
+            api.Recognize()
+            it = api.GetIterator()
+            for w in iterate_level(it, RIL.WORD):
+                try:
+                    txt = (w.GetUTF8Text(RIL.WORD) or "").strip()
+                    if not txt:
+                        continue
+                    x0, y0, x1, y1 = w.BoundingBox(RIL.WORD)
+                except Exception:
+                    continue
+                poly = _FakePoly([_FakeVertex(x0, y0), _FakeVertex(x1, y0),
+                                  _FakeVertex(x1, y1), _FakeVertex(x0, y1)])
+                word_anns.append(_FakeAnnotation(txt, poly))
+                full_parts.append(txt)
+    except Exception as exc:
+        log.warning("tesserocr OCR failed: %s", exc)
+        return []
+    if not word_anns:
+        return []
+    full_ann = _FakeAnnotation(" ".join(full_parts), word_anns[0].bounding_poly)
+    return [full_ann] + word_anns
+
+
 def _tesseract_annotations(image: PILImage.Image) -> list:
     """
     Run Tesseract on a PIL image, return list of _FakeAnnotation objects:
@@ -49,6 +87,10 @@ def _tesseract_annotations(image: PILImage.Image) -> list:
     downstream consumers (find_keyword_box, _tokens_left_of, etc.) work
     unchanged.
     """
+    # Bundled-engine path takes priority when configured (local Windows
+    # without a tesseract.exe install).
+    if os.environ.get("TESSEROCR_DATA"):
+        return _tesserocr_annotations(image)
     try:
         data = pytesseract.image_to_data(
             image.convert("RGB"),

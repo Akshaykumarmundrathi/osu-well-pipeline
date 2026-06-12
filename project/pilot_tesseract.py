@@ -39,6 +39,8 @@ csv.field_size_limit(2_000_000)
 # Offline guards
 os.environ["USE_VISION_API"] = "0"
 os.environ["GEMINI_DISABLED"] = "1"
+# Bundled-engine Tesseract (tesserocr wheel) — no tesseract.exe required.
+os.environ.setdefault("TESSEROCR_DATA", r"D:\tools\tessdata")
 _tc = os.environ.get("TESSERACT_CMD", "")
 if _tc:
     import pytesseract

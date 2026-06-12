@@ -309,8 +309,8 @@ All `{stage}_status` columns use exactly these four values:
 |-------|---------|
 | `pending` | Not yet processed |
 | `done` | Completed successfully |
-| `failed` | Processing error — will be retried on next run |
-| `skipped` | Stage does not apply to this tier (e.g. latlong on early collections) |
+| `failed` | Processing error — terminal on resume (skip_failed); reset scripts or targeted reruns retry them |
+| `skipped` | Stage does not apply (latlong below collection prior; grid/location when lat/lon was FOUND; dot when grid missing). Never a blanket tier skip for location. |
 
 ---
 

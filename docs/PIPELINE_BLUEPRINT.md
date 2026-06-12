@@ -209,7 +209,7 @@ GRID_W_LOOSE  = (150, 1200) px  GRID_H_LOOSE  = (150, 1200) px
 ```python
 {
   "detected":    True,
-  "page":        1,           # 0-indexed page where grid was found
+  "page":        1,           # 1-indexed page where grid was found
   "bbox":        (x0,y0,x1,y1),
   "method":      "otsu",      # which CV extractor succeeded
   "confidence":  85,          # 0-100; <80 → review flag
@@ -341,13 +341,14 @@ Key rotation: GOOGLE_API_KEY=key1,key2,key3 → auto-rotate on exhaustion
 
 ### Stage 5 — Dot / U-Net (`dot/dot_extractor.py`)
 
-**When run:** Only when grid was detected (has a saved grid PNG).
+**When run:** Only when grid was detected. If the grid PNG was deleted
+(S3-era cleanup), the crop is regenerated on the fly from the stored bbox.
 
 **Input:** Grid PNG image written by Stage 2.
 
 **Algorithm:**
 ```
-grid_dir/stem_page_NN_grid.png  (512×512 px, 8×8 sections)
+grid_dir/stem_page_NN_grid.png  (raw bbox crop, ~140–450 px; 8×8 sections)
     │
     ├─► _get_model()  (lazy singleton — loads once per process)
     │       torch.load(unet_best.pth, map_location=cpu)
@@ -355,7 +356,7 @@ grid_dir/stem_page_NN_grid.png  (512×512 px, 8×8 sections)
     │       model.eval()
     │
     └─► DotDetector.predict_image(grid_path)
-            Resize to model input (512×512)
+            Resize to model input (192×192 — IMG_SIZE in unet_dot_detector.py)
             Forward pass → probability heatmap
             Threshold per tier:
                 early=0.55, transition=0.52, mid=0.50, late=0.47, modern=0.45
@@ -439,7 +440,7 @@ $OUTPUT_ROOT/
 ├── quota_events.json             ← Gemini API key rotation log
 │
 ├── grids/{collection}/{year}/{month}/{stem}/
-│   └── {stem}_page_NN_grid.png       512×512 px perspective-corrected
+│   └── {stem}_page_NN_grid.png       raw bbox crop (~140–450 px)
 │
 ├── locations/{collection}/{year}/{month}/{stem}/
 │   ├── {stem}_page_NN_location_crop.png   tight STR crop
@@ -503,42 +504,37 @@ Status values: pending | done | failed | skipped
 
 ## 5. Tier System & Stage Gates
 
-| Tier | Collections | Era | run_latlong | run_location | STR strategy |
+| Tier | Collections | Era | latlong | location | STR strategy |
 |---|---|---|---|---|---|
-| `early` | 1–6 | ~1911–1940s | ❌ | ❌ | str_keywords |
-| `transition` | 7–8 | ~1950s | ❌ | ❌ | str_keywords |
-| `mid` | 9–10 | ~1960s–70s | ❌ | ✅ | location_keyword |
-| `late` | 11–12 | ~1980s–90s | ✅ | ✅ | location_keyword |
-| `modern` | 13+ | ~2000–2024 | ✅ | ✅ | location_keyword |
+| `early` | 1–6 | 1911–1970 | prior-gated (skip: <5%) | ✅ always | str_keywords |
+| `transition` | 7–8 | 1971–1982 | prior-gated (skip) | ✅ always | str_keywords |
+| `mid` | 9–10 | 1983–2000 | prior-gated (skip: 1–3%) | ✅ always | location_keyword → str_keywords fallback |
+| `late` | 11–12 | 2001–2018 | C11 skip (≈3%) / C12 run (≈29%) | ✅ always | location_keyword → str_keywords fallback |
+| `modern` | 13 | 2019–2024 | ✅ run (≈77%) | ✅ always | location_keyword → str_keywords fallback |
+
+`run_location` is **True for every tier** — the per-page illegibility guard
+(≥15 OCR tokens) replaces the old blanket tier skip. The latlong gate is
+DATA-driven (`config.latlong_prior()` per collection vs `LATLONG_MIN_PRIOR=0.05`),
+not tier-driven. A form-type override forces `str_keywords` whenever the grid
+classifier sees T1/T2/T3 printed-label forms regardless of tier.
 
 **Decision flow for each record:**
 ```
-tier = tier_for(collection_num)
+latlong → RUN only if latlong_prior(collection) >= 0.05   (C12, C13)
 
-if tier in (early, transition):
-    latlong   → SKIPPED
-    location  → SKIPPED
-    grid      → RUN  (grid + U-Net dot are the primary data signals)
-    county    → RUN
-    dot       → RUN  (if grid found)
-
-if tier == mid:
-    latlong   → SKIPPED
-    grid      → RUN
-    location  → RUN  (STR via "Location:" keyword)
-    county    → RUN
-    dot       → RUN  (if grid found)
-
-if tier in (late, modern):
-    latlong   → RUN  (may find decimal coordinates)
-    if lat/lon found:
-        grid      → SKIPPED
-        location  → SKIPPED
-    else:
-        grid      → RUN
-        location  → RUN
-    county    → RUN
-    dot       → RUN  (if grid found)
+if lat/lon FOUND (this run or prior):        # presence, not format!
+    grid, location → SKIPPED
+else:
+    grid     → RUN  page 1 first; PAGE_HINTS may prioritise a later page
+               (C12 multi-page → page 3); anchor → measured-envelope crop
+               → full-page CV; out-of-envelope detections get grid_suspect
+    location → RUN  (all tiers) recipe region → zone hint → FULL-PAGE
+               fallback; 2.5× re-OCR retry when exactly one STR field
+               is missing
+county  → RUN  envelope-first keyword search, multi-page (a boilerplate
+           'County' on an early page no longer stops the scan)
+dot     → RUN if grid found; PNG regenerated from stored bbox when the
+           crop file was deleted
 ```
 
 ---
@@ -561,19 +557,33 @@ and marks `needs_review=True` in `processing_status.csv`.
 
 **Retry expansion:**
 ```
-Grid:     strict (280–850 px)  →  relaxed (150–1200 px)  on first retry
-Location: min_overlap 0.35     →  0.15                   on retry
-Latlong:  max_pages 2          →  99 (all pages)         on retry
-County:   crop_scale 1.0       →  1.5 (wider crop)       on retry
-          → full_page=True if crop retry still fails
+Grid:     strict W(120–900) H(150–900)  →  loose W/H(90–1200) on retry
+          + per-tier AR windows (TIER_GRID_AR)
+          + early/transition width cap 565px (TIER_GRID_W_MAX — rejects
+            casing-table false positives; real grids p99=411px)
+Location: min_overlap 0.35 → 0.15 on retry; hi-res 2.5× re-OCR when
+          exactly 2 of 3 STR fields extracted (recovers dropped RGE/TWP
+          labels below Vision's 2× floor)
+Latlong:  max_pages 2 → 99 (all pages) on retry
+County:   crop_scale 1.0 → 1.5 → full_page Gemini; county fuzzy match
+          rejects candidates shorter than 3 chars ('N' must never match
+          'blaiNe')
 ```
 
-**U-Net dot thresholds by tier:**
+**U-Net dot thresholds by tier** (dot/dot_extractor.py — evolved values):
 ```
-early=0.55  transition=0.52  mid=0.50  late=0.47  modern=0.45
+early=0.52  transition=0.48  mid=0.35  late=0.28  modern=0.26
 ```
-(Older records have bolder ink dots → higher threshold catches them cleanly.
-Modern faint dot marks use a lower threshold to avoid misses.)
+(Bold early ink → higher threshold; the model under-activates on MID/LATE
+grid styles it wasn't trained on, so those thresholds are lowered until the
+regression-gated retrain (retrain_unet.py) lands. A per-tier evolved
+threshold from parameter_suggestions.json overrides these when present.)
+
+**Ground-truth guard flags (never gates):**
+- `grid_suspect` — detected bbox centre outside the hand-measured
+  per-collection envelope (2,269 manual grid boxes)
+- `county_mismatch:<county>` — extracted county disagrees with the county
+  of the resolved PLSS cell (audit_consistency.py; caught the E/W mirror)
 
 ---
 
@@ -658,7 +668,7 @@ UNET_CHECKPOINT env var        (set by run_batch_job.py → /app/unet_best.pth)
 ```
 FARGATE_SPOT containers — NO GPU
 torch loaded with map_location="cpu"
-Inference per grid image: ~0.3–0.8 seconds (512×512, CPU)
+Inference per grid image: ~0.3–0.8 seconds (192×192, CPU)
 Model: UNet(in_channels=1, out_channels=1, features=[16,32,64,128])
        ~1.8M parameters — lightweight, fast on CPU
 ```

@@ -102,8 +102,8 @@ The manager is created **once per record** and passed to all three stage functio
 - **Google Cloud Vision API** credentials: set `GOOGLE_APPLICATION_CREDENTIALS` to the service account JSON. Never commit the key file — use `.env` locally; Secrets Manager in Batch.
 - **Gemini API**: requires `GOOGLE_API_KEY` env var. County extraction silently skips the Gemini step if not set. Default rate limit: 3 s between calls (free tier). Override with `GEMINI_MIN_CALL_GAP_S`.
 - **rapidfuzz** is optional — county fuzzy matching falls back to `difflib` if not installed.
-- PDFs are expected to have ≤ 2 pages. Grid appears on one page only. County keyword search tries page 0 then page 1.
-- Grid detection size filter (`_W_MIN=280, _W_MAX=850` in `grid/scoring.py`) was calibrated for 2× resolution rendering. Adjust if PDFs render at a different DPI.
+- Most PDFs have 1-4 pages. Grid is on PAGE 1 for the vast majority (scanned forward; PAGE_HINTS prioritises page 3 for C12 multi-page files). County scans up to MAX_COUNTY_PAGES=3 and continues past boilerplate keyword hits.
+- Grid detection size filters (config: GRID_W_STRICT=(120,900), per-tier AR windows, TIER_GRID_W_MAX=565 for early/transition) are calibrated for 2× rendering. Hand-measured per-collection envelopes live in `location/recipes.py`.
 
 ## Output Layout
 

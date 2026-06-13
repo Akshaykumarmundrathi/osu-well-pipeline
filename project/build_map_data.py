@@ -205,7 +205,9 @@ def _well_name(pdf_stem: str) -> str:
 
 
 def _clean_collection(raw: str) -> str:
-    return raw.replace("ExportedFolderContents ", "").replace("ExportedFolderContents_", "").strip()
+    return (raw.replace("ExportedFolderContents ", "")
+               .replace("ExportedFolderContents_", "")
+               .replace(".zip", "").strip())
 
 
 def _decade_label(year_str: str) -> str:

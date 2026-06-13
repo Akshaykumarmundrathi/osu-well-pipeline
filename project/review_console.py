@@ -37,13 +37,18 @@ NOTE_COLS = ["pdf_stem", "collection", "year", "month", "verdict", "format_label
 MAXW = 620   # page render width on canvas
 
 
-def _ledger():
+def _ledger(only=None):
+    """Load ledger rows. If `only` (a set of stems) is given, keep just those —
+    avoids holding all 571k rows in RAM so the console is safe to run alongside
+    the pipeline on a low-memory machine."""
     m = {}
     p = OUT / "master_ledger.csv"
     if p.exists():
         with p.open(newline="", encoding="utf-8", errors="replace") as f:
             for r in csv.DictReader(f):
-                m[r["pdf_stem"]] = r
+                s = r["pdf_stem"]
+                if only is None or s in only:
+                    m[s] = r
     return m
 
 
@@ -291,8 +296,9 @@ def main():
     with open(a.index, newline="", encoding="utf-8", errors="replace") as f:
         items = list(csv.DictReader(f))
     print(f"{len(items)} records in review queue")
+    stems = {r["pdf_stem"] for r in items}
     root = tk.Tk()
-    App(root, items, _ledger())
+    App(root, items, _ledger(only=stems))
     root.mainloop()
 
 

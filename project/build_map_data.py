@@ -732,6 +732,23 @@ def main():
                     carried += 1
             if carried:
                 print(f"  Carried forward {carried} human-verified mark(s).")
+
+            # ── Step 1c: MONOTONIC GUARD — never drop an existing mapped well ──
+            # A rebuild may only ADD or UPDATE wells, never remove one. Any well
+            # present on the live site whose stem is absent from this build is
+            # carried forward unchanged, so old successful data on the map can
+            # never be disturbed by a new/partial run.
+            new_stems = {f["properties"].get("pdf_stem") for f in geojson["features"]}
+            kept = 0
+            for f in prior.get("features", []):
+                if f["properties"].get("pdf_stem") not in new_stems:
+                    geojson["features"].append(f)
+                    kept += 1
+            if kept:
+                geojson["well_count"] = len(geojson["features"])
+                n_feat = len(geojson["features"])
+                print(f"  Monotonic guard: carried forward {kept} existing well(s) "
+                      f"not in this build (total {n_feat:,}).")
         except Exception as exc:
             print(f"  WARNING: could not read prior GeoJSON for verified marks: {exc}")
 

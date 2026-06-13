@@ -22,9 +22,18 @@ LOGCSV = Path("docs/data/corrections_log.csv")
 
 _FIELD_RE = re.compile(
     r"^- (section|township|range|county|quadrant): `([^`]*)` -> `([^`]*)`", re.M)
+_COORD_RE = re.compile(r"^- (lat|lon): `([^`]*)` -> `([^`]*)`", re.M)
 _STEM_RE = re.compile(r"\*\*Well:\*\* `([^`]+)`")
 FIELD_TO_PROP = {"section": "section", "township": "township",
                  "range": "range", "county": "county", "quadrant": "quadrant"}
+
+
+def _to_coord(v: str) -> float | None:
+    try:
+        f = float(str(v).strip())
+        return f if -180.0 <= f <= 180.0 else None
+    except (TypeError, ValueError):
+        return None
 
 
 def api(path, method="GET", payload=None):
@@ -111,8 +120,10 @@ def main() -> None:
             continue
         stem = m.group(1)
         changes = {f: new for f, old, new in _FIELD_RE.findall(body)}
+        coords = {f: new for f, old, new in _COORD_RE.findall(body)}
         feat = feats.get(stem)
-        verified = issue["title"].startswith("[VERIFIED-CORRECT]") or not changes
+        verified = (issue["title"].startswith("[VERIFIED-CORRECT]")
+                    or (not changes and not coords))
         note = ""
         if feat is None:
             note = "well not found in current dataset (may be unmapped) — logged only"
@@ -128,7 +139,26 @@ def main() -> None:
                     p[prop] = newv
                     if f != "county":
                         str_changed = True
-            if str_changed:
+            # Direct coordinate override wins over PLSS re-resolution: the user
+            # read the lat/lon off the PDF, so trust it verbatim.
+            lat_v = _to_coord(coords.get("lat")) if "lat" in coords else None
+            lon_v = _to_coord(coords.get("lon")) if "lon" in coords else None
+            if lat_v is not None or lon_v is not None:
+                lat = lat_v if lat_v is not None else _to_coord(p.get("lat"))
+                lon = lon_v if lon_v is not None else _to_coord(p.get("lon"))
+                if lat is not None and lon is not None:
+                    for fld, ov, nv in (("lat", p.get("lat"), lat),
+                                        ("lon", p.get("lon"), lon)):
+                        log_rows.append({"stem": stem, "field": fld,
+                                         "old": str(ov), "new": str(nv),
+                                         "issue": issue["number"]})
+                    feat["geometry"]["coordinates"] = [round(lon, 7), round(lat, 7)]
+                    p["lat"], p["lon"] = round(lat, 7), round(lon, 7)
+                    p["resolution"] = "human_latlong"
+                    note = "coordinates set from direct lat/lon override (human_latlong)"
+                else:
+                    note = "lat/lon override incomplete — ignored"
+            elif str_changed:
                 res = resolve_rds(p.get("section"), p.get("township"),
                                   p.get("range"), p.get("quadrant"),
                                   p.get("county"))

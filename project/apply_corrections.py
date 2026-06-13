@@ -41,7 +41,16 @@ AUDIT    = Path(r"D:\project_outputs\corrections_applied.csv")
 
 _FIELD_RE = re.compile(r"^- (section|township|range|county|quadrant): `([^`]*)` -> `([^`]*)`",
                        re.M)
+_COORD_RE = re.compile(r"^- (lat|lon): `([^`]*)` -> `([^`]*)`", re.M)
 _STEM_RE  = re.compile(r"\*\*Well:\*\* `([^`]+)`")
+
+
+def _to_coord(v):
+    try:
+        f = float(str(v).strip())
+        return f if -180.0 <= f <= 180.0 else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _gh_token() -> str:
@@ -99,9 +108,10 @@ def parse_issue(issue: dict) -> dict | None:
     if not m:
         return None
     changes = {f: new for f, old, new in _FIELD_RE.findall(body)}
+    coords = {f: new for f, old, new in _COORD_RE.findall(body)}
     return {"number": issue["number"], "stem": m.group(1),
             "verified": "VERIFIED-CORRECT" in issue.get("title", ""),
-            "changes": changes}
+            "changes": changes, "coords": coords}
 
 
 def main() -> None:
@@ -110,8 +120,8 @@ def main() -> None:
     args = ap.parse_args()
 
     parsed = [p for p in (parse_issue(i) for i in fetch_issues()) if p]
-    fixes    = [p for p in parsed if p["changes"] and not p["verified"]]
-    verified = [p for p in parsed if p["verified"] or not p["changes"]]
+    fixes    = [p for p in parsed if (p["changes"] or p.get("coords")) and not p["verified"]]
+    verified = [p for p in parsed if p["verified"] or not (p["changes"] or p.get("coords"))]
     print(f"{len(fixes)} corrections, {len(verified)} verified-correct")
     for p in fixes:
         print(f"  #{p['number']} {p['stem'][:45]}: "
@@ -146,6 +156,26 @@ def main() -> None:
                 row[col] = newv
                 if f in ("section", "township", "range", "quadrant"):
                     str_changed.add(row["pdf_stem"])
+        # Direct lat/lon override wins over any STR re-resolution: set the
+        # resolved coordinates verbatim and mark the source human_latlong so
+        # later enrichment does not overwrite it.
+        co = p.get("coords") or {}
+        lat_v = _to_coord(co.get("lat")) if "lat" in co else None
+        lon_v = _to_coord(co.get("lon")) if "lon" in co else None
+        if lat_v is not None or lon_v is not None:
+            lat = lat_v if lat_v is not None else _to_coord(row.get("resolved_lat"))
+            lon = lon_v if lon_v is not None else _to_coord(row.get("resolved_lon"))
+            if lat is not None and lon is not None:
+                for col, nv in (("resolved_lat", round(lat, 7)),
+                                ("resolved_lon", round(lon, 7))):
+                    if col in row and str(row[col]) != str(nv):
+                        audit_rows.append({"pdf_stem": row["pdf_stem"],
+                                           "field": col, "old": row.get(col, ""),
+                                           "new": nv, "issue": p["number"]})
+                        row[col] = nv
+                if "resolution_source" in row:
+                    row["resolution_source"] = "human_latlong"
+                str_changed.discard(row["pdf_stem"])  # no re-resolution needed
         # Idempotent: a re-run where all values already match still counts
         # as handled so the issue gets closed.
         applied.add(p["number"])

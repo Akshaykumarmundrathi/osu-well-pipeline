@@ -1,20 +1,20 @@
 # Reconciliation report
 
-Source universe (dataset_index): **576,877**
+Source universe (dataset_index): **571,446**
 
 ## Overall state
 - not_processed : 56,394
-- queued        : 515,215
-- partial       : 1,688
+- queued        : 509,605
+- partial       : 1,931
 - success (all 5 stages): 2
-- **mapped on site**    : 5,179
+- **mapped on site**    : 5,099
 
 ## Failures by first-failed stage
 - latlong: 0
-- grid: 330
-- location: 1,909
-- county: 234
-- dot: 1,105
+- grid: 328
+- location: 1,822
+- county: 289
+- dot: 1,075
 
 ## Cross-source integrity
 - status stems NOT in source (orphans): 1

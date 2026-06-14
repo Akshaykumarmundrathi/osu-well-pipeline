@@ -86,11 +86,10 @@ class App:
         # controls unreachable). Maximise, and cap geometry to the display.
         sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
         self._sw, self._sh = sw, sh
-        root.geometry(f"{min(1280, sw-20)}x{min(740, sh-60)}+0+0")
-        try:
-            root.state("zoomed")          # maximise on Windows
-        except Exception:
-            pass
+        root.geometry(f"{min(1280, sw-20)}x{min(740, sh-90)}+0+0")
+        # maximise AFTER the window is mapped (zoomed on an unmapped root can
+        # leave the window in a broken/invisible state on some Windows setups)
+        root.after(300, lambda: self._safe_zoom())
 
         top = tk.Frame(root); top.pack(fill="x")
         self.hdr = tk.Label(top, font=("Consolas", 12, "bold"), anchor="w")
@@ -147,6 +146,21 @@ class App:
         self._imgs = []
         self.set_region("grid")
         self.show()
+        # Force the window to actually appear in front (it was opening unfocused
+        # / behind the cmd window on some setups -> looked like "nothing happens").
+        root.update_idletasks()
+        root.deiconify()
+        root.lift()
+        root.attributes("-topmost", True)
+        root.after(700, lambda: root.attributes("-topmost", False))
+        root.focus_force()
+        print("window opened — if you don't see it, check the taskbar.", flush=True)
+
+    def _safe_zoom(self):
+        try:
+            self.root.state("zoomed")
+        except Exception:
+            pass
 
     # ---- region ----
     def set_region(self, r):

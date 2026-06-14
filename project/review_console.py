@@ -34,7 +34,7 @@ BOXCOLS = [f"{r}_box" for r in REGIONS]
 NOTE_COLS = ["pdf_stem", "collection", "year", "month", "verdict", "format_label",
              "notes", "section", "township", "range", "county_name",
              "resolved_lat", "resolved_lon", "resolution_source"] + BOXCOLS
-MAXW = 620   # page render width on canvas
+MAXW = 560   # page render width on canvas (fits 1280-wide screens)
 
 
 def _ledger(only=None):
@@ -82,7 +82,15 @@ class App:
         self.prev_saved = None     # last saved row (for "same as previous")
         self._drag = None
         root.title("Record review console — box annotation")
-        root.geometry("1480x940")
+        # Fit the actual screen (oversized windows open off-screen with the
+        # controls unreachable). Maximise, and cap geometry to the display.
+        sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
+        self._sw, self._sh = sw, sh
+        root.geometry(f"{min(1280, sw-20)}x{min(740, sh-60)}+0+0")
+        try:
+            root.state("zoomed")          # maximise on Windows
+        except Exception:
+            pass
 
         top = tk.Frame(root); top.pack(fill="x")
         self.hdr = tk.Label(top, font=("Consolas", 12, "bold"), anchor="w")
@@ -114,7 +122,7 @@ class App:
         self.vscroll.config(command=self.canvas.yview)
         # mouse wheel scrolls the page
         self.canvas.bind("<MouseWheel>", lambda e: self.canvas.yview_scroll(int(-e.delta/120), "units"))
-        right = tk.Frame(body, width=800); right.pack(side="right", fill="both")
+        right = tk.Frame(body, width=440); right.pack(side="right", fill="both")
         right.pack_propagate(False)
         self.img_frame = tk.Frame(right); self.img_frame.pack(fill="x")
         self.fields = tk.Label(right, font=("Consolas", 11), justify="left", anchor="w")
@@ -226,7 +234,7 @@ class App:
             tk.Label(col, text=kind, font=("Consolas", 9, "bold")).pack()
             p = pngs.get(kind)
             if p and p.exists():
-                im = Image.open(p); im.thumbnail((240, 240))
+                im = Image.open(p); im.thumbnail((132, 160))
                 ti = ImageTk.PhotoImage(im); self._imgs.append(ti)
                 tk.Label(col, image=ti).pack()
             else:

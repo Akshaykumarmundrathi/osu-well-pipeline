@@ -105,8 +105,15 @@ class App:
         self.pagelbl = tk.Label(reg, font=("Consolas", 10)); self.pagelbl.pack(side="right", padx=8)
 
         body = tk.Frame(root); body.pack(fill="both", expand=True)
-        self.canvas = tk.Canvas(body, bg="#333", width=MAXW)
+        canvas_wrap = tk.Frame(body); canvas_wrap.pack(side="left", fill="both", expand=True)
+        self.vscroll = tk.Scrollbar(canvas_wrap, orient="vertical")
+        self.vscroll.pack(side="right", fill="y")
+        self.canvas = tk.Canvas(canvas_wrap, bg="#333", width=MAXW,
+                                yscrollcommand=self.vscroll.set)
         self.canvas.pack(side="left", fill="both", expand=True)
+        self.vscroll.config(command=self.canvas.yview)
+        # mouse wheel scrolls the page
+        self.canvas.bind("<MouseWheel>", lambda e: self.canvas.yview_scroll(int(-e.delta/120), "units"))
         right = tk.Frame(body, width=800); right.pack(side="right", fill="both")
         right.pack_propagate(False)
         self.img_frame = tk.Frame(right); self.img_frame.pack(fill="x")
@@ -154,9 +161,11 @@ class App:
             self.pw, self.ph = int(im.width*sc), int(im.height*sc)
             im = im.resize((self.pw, self.ph))
             ti = ImageTk.PhotoImage(im); self._imgs.append(ti)
-            self.canvas.config(width=self.pw, height=self.ph,
-                               scrollregion=(0, 0, self.pw, self.ph))
+            # keep the widget at window size; scrollregion spans the FULL page so
+            # the whole record is reachable by scrolling (fixes cut-off pages).
+            self.canvas.config(width=self.pw, scrollregion=(0, 0, self.pw, self.ph))
             self.canvas.create_image(0, 0, anchor="nw", image=ti)
+            self.canvas.yview_moveto(0)
             d.close()
         except Exception as exc:
             self.npages = 1
@@ -176,25 +185,27 @@ class App:
                                     text=r, fill=COLORS[r], tags="box",
                                     font=("Consolas", 8, "bold"))
 
-    # ---- box drawing ----
+    # ---- box drawing (use canvas coords so scrolling is accounted for) ----
     def on_press(self, e):
-        self._drag = (e.x, e.y)
+        self._drag = (self.canvas.canvasx(e.x), self.canvas.canvasy(e.y))
 
     def on_drag(self, e):
         if not self._drag:
             return
         self._draw_boxes()
-        self.canvas.create_rectangle(self._drag[0], self._drag[1], e.x, e.y,
+        cx, cy = self.canvas.canvasx(e.x), self.canvas.canvasy(e.y)
+        self.canvas.create_rectangle(self._drag[0], self._drag[1], cx, cy,
                                      outline=COLORS[self.region], width=2, tags="box")
 
     def on_release(self, e):
         if not self._drag:
             return
-        x0, y0 = self._drag; x1, y1 = e.x, e.y
+        x0, y0 = self._drag
+        x1, y1 = self.canvas.canvasx(e.x), self.canvas.canvasy(e.y)
         self._drag = None
         if abs(x1-x0) < 4 or abs(y1-y0) < 4:
             return
-        nx0, nx1 = sorted((max(0, min(x0, x1))/self.pw, max(0, min(x1, x0)+abs(x1-x0))/self.pw))
+        nx0, nx1 = sorted((min(x0, x1)/self.pw, max(x0, x1)/self.pw))
         ny0, ny1 = sorted((min(y0, y1)/self.ph, max(y0, y1)/self.ph))
         self.boxes[self.region] = (self.page, round(nx0, 4), round(ny0, 4),
                                    round(nx1, 4), round(ny1, 4))

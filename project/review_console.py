@@ -133,16 +133,23 @@ class App:
         self.canvas.bind("<ButtonPress-1>", self.on_press)
         self.canvas.bind("<B1-Motion>", self.on_drag)
         self.canvas.bind("<ButtonRelease-1>", self.on_release)
-        root.bind("<Left>", lambda e: self.prev())
-        root.bind("<Right>", lambda e: self.next())
-        root.bind("<Prior>", lambda e: self.turn(-1))   # PageUp
-        root.bind("<Next>", lambda e: self.turn(1))     # PageDown
+        # Shortcut keys must NOT fire while typing in the notes / format fields.
+        def K(fn):
+            return lambda e: (None if self._typing() else fn())
+        root.bind("<Left>", K(self.prev))
+        root.bind("<Right>", K(self.next))
+        root.bind("<Prior>", K(lambda: self.turn(-1)))   # PageUp
+        root.bind("<Next>", K(lambda: self.turn(1)))     # PageDown
         for n, r in enumerate(REGIONS, 1):
-            root.bind(str(n), lambda e, rr=r: self.set_region(rr))
-        root.bind("s", lambda e: self.same_prev()); root.bind("S", lambda e: self.same_prev())
-        root.bind("c", lambda e: self.clear_boxes()); root.bind("C", lambda e: self.clear_boxes())
-        root.bind("o", lambda e: self.save("OK")); root.bind("O", lambda e: self.save("OK"))
-        root.bind("w", lambda e: self.save("WRONG")); root.bind("W", lambda e: self.save("WRONG"))
+            root.bind(str(n), K(lambda rr=r: self.set_region(rr)))
+        for k in ("s", "S"):
+            root.bind(k, K(self.same_prev))
+        for k in ("c", "C"):
+            root.bind(k, K(self.clear_boxes))
+        for k in ("o", "O"):
+            root.bind(k, K(lambda: self.save("OK")))
+        for k in ("w", "W"):
+            root.bind(k, K(lambda: self.save("WRONG")))
         self._imgs = []
         self.set_region("grid")
         self.show()
@@ -161,6 +168,14 @@ class App:
             self.root.state("zoomed")
         except Exception:
             pass
+
+    def _typing(self):
+        """True when the keyboard focus is in the notes box or format field —
+        so shortcut keys are suppressed and the keystroke types normally."""
+        try:
+            return self.root.focus_get() in (self.txt, self.fmt)
+        except Exception:
+            return False
 
     # ---- region ----
     def set_region(self, r):

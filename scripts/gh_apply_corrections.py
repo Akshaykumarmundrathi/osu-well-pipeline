@@ -101,12 +101,42 @@ def resolve_rds(section, township, rng, quadrant, county) -> tuple[float, float,
 
 
 def main() -> None:
-    issues = [i for i in api(f"/repos/{REPO}/issues?state=open&per_page=100")
-              if "pull_request" not in i
-              and (i["title"].startswith("[CORRECTION]")
-                   or i["title"].startswith("[VERIFIED-CORRECT]"))]
+    # AUTHORIZATION GATE — only apply corrections from users with write access
+    # to the repo. GitHub reports this per-issue as author_association: OWNER,
+    # MEMBER, or COLLABORATOR = trusted; CONTRIBUTOR / NONE = the general public.
+    # An optional ALLOWED_CORRECTORS secret (comma-separated logins) extends the
+    # allowlist. Unauthorized correction issues are politely declined + closed,
+    # never applied to the map or RDS. (VERIFIED-CORRECT marks are harmless and
+    # also gated for consistency.)
+    TRUSTED_ASSOC = {"OWNER", "MEMBER", "COLLABORATOR"}
+    extra = {u.strip().lower() for u in
+             os.environ.get("ALLOWED_CORRECTORS", "").split(",") if u.strip()}
+
+    def _authorized(issue):
+        if (issue.get("author_association") or "").upper() in TRUSTED_ASSOC:
+            return True
+        return (issue.get("user", {}).get("login", "") or "").lower() in extra
+
+    all_corr = [i for i in api(f"/repos/{REPO}/issues?state=open&per_page=100")
+                if "pull_request" not in i
+                and (i["title"].startswith("[CORRECTION]")
+                     or i["title"].startswith("[VERIFIED-CORRECT]"))]
+    issues = [i for i in all_corr if _authorized(i)]
+    unauth = [i for i in all_corr if not _authorized(i)]
+    for i in unauth:
+        try:
+            api(f"/repos/{REPO}/issues/{i['number']}/comments", "POST",
+                {"body": "Thanks for the report! Map corrections can only be "
+                         "applied by authorized project members, so this hasn't "
+                         "been auto-applied. A maintainer will review it."})
+            api(f"/repos/{REPO}/issues/{i['number']}", "PATCH",
+                {"state": "closed", "labels": ["needs-maintainer-review"]})
+        except Exception as exc:
+            print(f"decline #{i['number']}: {exc}")
+    if unauth:
+        print(f"declined {len(unauth)} unauthorized correction issue(s)")
     if not issues:
-        print("no correction issues")
+        print("no authorized correction issues")
         return
 
     geo = json.loads(GEO.read_text(encoding="utf-8"))

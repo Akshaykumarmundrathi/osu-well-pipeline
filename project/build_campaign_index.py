@@ -26,6 +26,14 @@ def done_stems():
             st = [(r.get(f"{x}_status") or "") for x in STAGES]
             if any(st) and all(v in ("done", "failed", "skipped") for v in st):
                 done.add(s)
+    # also skip anything already mapped (e.g. by the modern-text path) so the
+    # slow grid pipeline doesn't re-process records that already have coords.
+    dc = OUT / "dot_coordinates.csv"
+    if dc.exists():
+        with dc.open(newline="", encoding="utf-8", errors="replace") as f:
+            for r in csv.DictReader(f):
+                if (r.get("resolved_lat") or "").strip():
+                    done.add(r.get("pdf_stem", ""))
     return done
 
 

@@ -23,6 +23,16 @@ from pathlib import Path
 
 csv.field_size_limit(2_000_000)
 sys.path.insert(0, str(Path(__file__).parent))
+
+# Load .env so RDS_* / GOOGLE_* are available (standalone script, not via main.py).
+_envf = Path(__file__).parent.parent / ".env"
+if _envf.exists():
+    for _line in _envf.read_text(encoding="utf-8", errors="replace").splitlines():
+        _line = _line.strip()
+        if "=" in _line and not _line.startswith("#"):
+            _k, _v = _line.split("=", 1)
+            os.environ.setdefault(_k.strip(), _v.strip().strip('"').strip("'"))
+
 import fitz
 from config import COUNTY_LIST_CLEAN
 
@@ -86,41 +96,29 @@ def main():
     if a.limit:
         rows = rows[:a.limit]
 
-    # lazy RDS
+    # Use the production PLSS resolver (proven RDS path).
     try:
-        from coord import plss_resolver
-        conn = plss_resolver.get_connection()
+        from coord.plss_resolver import PLSSResolver
+        R = PLSSResolver()
     except Exception as exc:
-        print(f"RDS unavailable ({exc}); will extract fields only, no coords")
-        conn = None
+        print(f"PLSSResolver unavailable ({exc}); extract fields only, no coords")
+        R = None
 
     def resolve(sec, twp, rng, quad, county):
-        if conn is None:
+        if R is None:
+            return None
+        tm = re.match(r"(\d+)\s*([NS])", twp or "")
+        rm = re.match(r"(\d+)\s*([EW])", rng or "")
+        if not (sec and tm and rm):
             return None
         try:
-            s = int(re.sub(r"\D", "", sec or "") or 0)
-            tm = re.match(r"(\d+)([NS])", twp or ""); rm = re.match(r"(\d+)([EW])", rng or "")
-            if not (1 <= s <= 36) or not tm or not rm:
-                return None
-            cur = conn.cursor()
-            p = {"s": s, "t": int(tm.group(1)), "ns": tm.group(2),
-                 "r": int(rm.group(1)), "ew": rm.group(2)}
-            if quad:
-                cur.execute('SELECT minx,miny,maxx,maxy FROM plss_grid WHERE sect_num=%(s)s '
-                            'AND township=%(t)s AND north_south=%(ns)s AND "range"=%(r)s '
-                            'AND east_west=%(ew)s AND quadrant_label=%(q)s LIMIT 1',
-                            {**p, "q": quad})
-                row = cur.fetchone()
-                if row:
-                    return (row[1]+row[3])/2, (row[0]+row[2])/2, "modern_text_quadrant"
-            cur.execute('SELECT MIN(minx),MIN(miny),MAX(maxx),MAX(maxy) FROM plss_grid '
-                        'WHERE sect_num=%(s)s AND township=%(t)s AND north_south=%(ns)s '
-                        'AND "range"=%(r)s AND east_west=%(ew)s', p)
-            row = cur.fetchone()
-            if row and row[0] is not None:
-                return (row[1]+row[3])/2, (row[0]+row[2])/2, "modern_text_centroid"
+            res = R.resolve_section_centroid(sec, int(tm.group(1)), tm.group(2),
+                                             int(rm.group(1)), rm.group(2), county or "")
         except Exception:
             return None
+        if res and res.get("lat") is not None and res.get("source") not in (
+                "rds_miss", "parse_failed", "bounds_invalid", None):
+            return res["lat"], res["lon"], f"modern_text_{res['source']}"
         return None
 
     fields = ["pdf_stem", "collection", "year", "month", "county_name",

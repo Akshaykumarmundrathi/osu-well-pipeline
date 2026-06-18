@@ -39,6 +39,16 @@ from utils.io_utils import annotate_page
 _SEP = r"[\.\-\s]"
 _SEC_RE = re.compile(rf"\bsec(?:tion|t)?{_SEP}*(\d{{1,2}})\b", re.I)
 
+# Fallback: a 1-2 digit section number positioned immediately before the
+# township in the STR string, even when the "SEC" label was dropped/split by
+# OCR. Catches "14 18N 13E", "14-18N-13E", "NW/4 14-18N-13E", "14, 18N, 13E".
+# (Township parses off its N/S letter and range off its E/W letter, so the
+# section is the only field that needs this rescue — see DECADE_INSIGHTS.md.)
+_SEC_BEFORE_TR = re.compile(
+    r"\b(\d{1,2})\s*[\.,\-\s]+\d{1,2}\s*[NS]\b\s*[\.,\-\s/]*\d{1,2}\s*[EW]\b",
+    re.I,
+)
+
 # Township with required direction: 18N / T-18N / Twp 27N
 _TWP_RE = re.compile(
     r"(?:\bT[\.\-\s]*|township\s*|twp\.?\s*|twn\.?\s*)?"
@@ -276,7 +286,11 @@ def _extract_section(text: str) -> str:
     """Return a section number in 1..36 or ''."""
     m = _SEC_RE.search(text)
     if not m:
-        return ""
+        # Fallback: section number sitting right before the township/range run,
+        # recovered even when OCR dropped the "SEC" label.
+        m = _SEC_BEFORE_TR.search(text)
+        if not m:
+            return ""
     try:
         n = int(m.group(1))
         return str(n) if 1 <= n <= 36 else ""

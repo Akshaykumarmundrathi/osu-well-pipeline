@@ -98,22 +98,58 @@ def _clean_county_key(county: str) -> str:
     return re.sub(r"\s+county\.?$", "", s).strip()
 
 
+# RDS-derived county→direction ground truth (county_directions.csv): for the
+# counties where N/S or E/W is single-valued across the whole PLSS database, the
+# direction is deterministic from the county alone (59/77 E/W, 60/77 N/S). This
+# is exact, unlike the heuristic priors below, and lets records that lost their
+# direction suffix resolve correctly. Falls back to the heuristic when the
+# county is non-deterministic or the lookup file is unavailable.
+_COUNTY_DIR: dict | None = None
+
+def _county_dir() -> dict:
+    global _COUNTY_DIR
+    if _COUNTY_DIR is not None:
+        return _COUNTY_DIR
+    _COUNTY_DIR = {}
+    import csv as _csv
+    from pathlib import Path as _P
+    fp = _P(__file__).resolve().parent.parent / "county_directions.csv"
+    try:
+        with fp.open(newline="", encoding="utf-8", errors="replace") as f:
+            for r in _csv.DictReader(f):
+                key = _clean_county_key(r.get("county", ""))
+                if key:
+                    _COUNTY_DIR[key] = {
+                        "ns": (r.get("ns") or "").strip().upper(),
+                        "ns_det": (r.get("ns_deterministic") or "").strip().lower() == "true",
+                        "ew": (r.get("ew") or "").strip().upper(),
+                        "ew_det": (r.get("ew_deterministic") or "").strip().lower() == "true"}
+    except Exception:
+        pass
+    return _COUNTY_DIR
+
+
 def _oklahoma_ns_prior(county_clean: str) -> list[str]:
     """
-    Township-direction geographic prior.
-    In Oklahoma, Township N dominates the entire state (baseline runs
-    through central OK; only ~8 southern-tier rows are Township S).
+    Township-direction prior. Uses the RDS-derived deterministic direction when
+    the county is single-valued; otherwise N dominates Oklahoma (only ~8
+    southern-tier rows are Township S).
     """
+    d = _county_dir().get(county_clean)
+    if d and d["ns_det"] and d["ns"] in ("N", "S"):
+        return [d["ns"]]
     return ["N", "S"]
 
 
 def _oklahoma_ew_prior(county_clean: str) -> list[str]:
     """
-    Range-direction geographic prior for Oklahoma.
-    Panhandle: Cimarron Meridian → East only.
-    East Oklahoma counties: Indian Meridian → East first.
-    All others (most of the state): West first.
+    Range-direction prior for Oklahoma. Uses the RDS-derived deterministic
+    direction when the county is single-valued; otherwise falls back to the
+    meridian heuristic (Panhandle → East; East Oklahoma → East first; else West).
     """
+    d = _county_dir().get(county_clean)
+    if d and d["ew_det"] and d["ew"] in ("E", "W"):
+        return [d["ew"]]
     if county_clean in _COUNTY_PANHANDLE:
         return ["E"]           # Cimarron Meridian — Range East only
     if county_clean in _COUNTY_RANGE_EAST_FIRST:

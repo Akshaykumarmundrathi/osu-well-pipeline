@@ -177,6 +177,14 @@ def main():
              OUTPUT_DIR, S3_BUCKET, S3_OUT_PREFIX)
     log.info("="*60)
 
+    # OCR backend guard — the cloud run must use Google Vision (Tesseract is
+    # proven inaccurate on the older scans). Force it on unless an operator
+    # explicitly opts into a Tesseract experiment, and surface it in the logs.
+    if os.environ.get("USE_VISION_API") != "0":
+        os.environ["USE_VISION_API"] = "1"
+    log.info("  OCR backend: %s",
+             "Google Vision" if os.environ.get("USE_VISION_API") == "1" else "Tesseract (EXPERIMENT)")
+
     # 1. Secrets
     pull_secrets()
 

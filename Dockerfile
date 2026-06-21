@@ -44,9 +44,14 @@ COPY unet_best.pth .
 COPY unet_dot_detector.py .
 
 # ── Runtime config ───────────────────────────────────────────────────────────
+# USE_VISION_API=1: the cloud run MUST use Google Vision. A pilot proved the
+# bundled Tesseract engine fails on the older scanned forms (C1–C5 location
+# 0–8%, county 13–48% agreement) because extraction is spatial, not OCR-only.
+# Vision is the accurate path; Gemini handles county normalization on the free
+# tier. (Override to 0 only for an explicit Tesseract experiment.)
 ENV PYTHONPATH=/app/project \
     OUTPUT_ROOT=/tmp/output \
-    USE_VISION_API=0 \
+    USE_VISION_API=1 \
     GEMINI_MIN_CALL_GAP_S=3.0 \
     PYTHONUNBUFFERED=1
 

@@ -1,8 +1,8 @@
 # Oklahoma Historical Well Records — Digitization Pipeline
 
-**570,953 scanned oil & gas well documents (1911–2024) → structured, mapped, verifiable geographic data.**
+**571,446 scanned oil & gas well documents (1911–2024) → structured, mapped, verifiable geographic data.**
 
-🗺️ **[Live interactive map](https://akshaykumarmundrathi.github.io/osu-well-pipeline/)** — **4,879 wells mapped** (growing as eras are processed), hover for details, open the original scanned record, submit corrections inline.
+🗺️ **[Live interactive map](https://akshaykumarmundrathi.github.io/osu-well-pipeline/)** — **51,559 wells mapped** across all 77 Oklahoma counties (12,662 at exact printed coordinates; growing as eras are processed), hover for details, open the original scanned record, submit corrections inline.
 
 ---
 

@@ -204,6 +204,17 @@ def _well_name(pdf_stem: str) -> str:
     return parts[1] if len(parts) >= 2 else pdf_stem
 
 
+def _clean_county(raw) -> str:
+    """Normalise county to canonical 'Creek' form. Raw values mix case and an
+    optional ' County' suffix ('creek', 'Creek County', 'CREEK'), which split
+    one county into several site entries (site showed 148 counties vs 77)."""
+    s = str(raw).strip() if raw not in (None, "", "None") else ""
+    if not s:
+        return ""
+    s = re.sub(r"\s+county\.?$", "", s, flags=re.I).strip()
+    return s.title()
+
+
 def _clean_collection(raw: str) -> str:
     return (raw.replace("ExportedFolderContents ", "")
                .replace("ExportedFolderContents_", "")
@@ -267,7 +278,7 @@ def _build_feature(row: dict, dot_lat: float, dot_lon: float) -> dict:
         "decade":             _str(row.get("decade")) or _decade_label(year),
         "model_tier":         _str(row.get("model_tier")),
         # Location
-        "county":             _str(row.get("county_name")),
+        "county":             _clean_county(row.get("county_name")),
         "section":            _str(row.get("section")),
         "township":           _str(row.get("township")),
         "range":              _str(row.get("range")),

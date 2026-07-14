@@ -136,6 +136,13 @@ commit trail:
 5. **Put humans where they're irreplaceable** (ground-truth envelopes, dot labels, public corrections) and automate the rest — 2,781 reviewed forms leveraged into half a million records.
 6. **Reconcile everything to one ledger** — disk, archive, index, tracker, coordinates, cloud, site — or drift will quietly eat correctness.
 
+
+## Acknowledgements & Disclaimer
+
+**Acknowledgements.** This material is based upon work supported by the Department of Energy Office of Fossil Energy and Carbon Management under the following: Award Number: DE-FE0032362; Award Title: Anadarko Basin Carbon Management Hub; Award Start and End Dates: 07/01/2024 – 06/30/2026. Data and material were provided by Devon Energy.
+
+**Disclaimer.** This report was prepared as an account of work sponsored by an agency of the United States Government. Neither the United States Government nor any agency thereof, nor any of their employees, makes any warranty, express or implied, or assumes any legal liability or responsibility for the accuracy, completeness, or usefulness of any information, apparatus, product, or process disclosed, or represents that its use would not infringe privately owned rights. Reference herein to any specific commercial product, process, or service by trade name, trademark, manufacturer, or otherwise does not necessarily constitute or imply its endorsement, recommendation, or favoring by the United States Government or any agency thereof. The views and opinions of authors expressed herein do not necessarily state or reflect those of the United States Government or any agency thereof.
+
 ---
 
 *Written from the project's full arc (Aug 2025 – Jul 2026): the inherited prototype artifacts (Scope of Work, Grid Detection Report, the original Colab notebook), the production commit history (May 15 – Jul 12, 2026), issue registry, pilot reports, insight documents (`RECORDS_REFERENCE.md`, `MAP_AND_DATA_INSIGHTS.md`, `DECADE_INSIGHTS.md`, `RDS_INSIGHTS.md`, `PIPELINE_SCRUTINY.md`, `SECURITY_AUDIT.md`, `AWS_RUN_DESIGN.md`), session logs, and project correspondence with Prof. Priyank Jaiswal (Jul 2025 – Jul 2026).*

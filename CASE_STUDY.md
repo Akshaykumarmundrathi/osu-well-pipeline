@@ -100,7 +100,21 @@ scanned PDF (ZIP / S3)
 - Map payload optimization (52 MB JSON → tiling/clustering) as the corpus completes
 - *AAPG Bulletin* manuscript (drafted; poster presented at AAPG Orphaned/Abandoned/Idle/Marginal Wells, Tulsa, March 25–27, 2025)
 
-## 9. Takeaways
+## 9. Session Logs
+
+Working sessions are journaled under [`logs/history/`](logs/history/) — points of
+discussion, actions, thoughts, ideas, and work, as a running companion to the
+commit trail:
+
+- [`2026-07-14 — Cloud-native hardening & cost-control review`](logs/history/2026-07-14_cloud-hardening-session.md)
+  — full-code scrutiny pass (robustness confirmed; RDS county→direction backfill
+  wired into the resolver, `de960f7`); caught a pre-launch cloud bug where the
+  container defaulted to Tesseract instead of Vision (`bb311c0`); established the
+  cost reality that the legacy backlog is a Vision-budget decision, not an
+  engineering gap, and scoped an autonomous Gemini free-tier cool-down for the
+  parts that *are* free-limited.
+
+## 10. Takeaways
 
 1. **Route by format era, then optimize per route** — the single decision worth the most wells per dollar.
 2. **Spatial context is the moat**: document understanding at scale is about *where* text sits, not just what it says.

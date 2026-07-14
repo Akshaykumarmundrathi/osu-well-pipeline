@@ -25,8 +25,9 @@ The project long predates the production repository. The git history (first comm
 | **Takeover & gap analysis** | Jul – Nov 2025 | Current author takes over — volunteer research request (Jul 12, 2025), handover of the prior researcher's materials (Jul 19), acceptance (Jul 20). Months of grinding through the inherited notebook and reports to understand the approach, refine ideas and structures, and design new infrastructure. The core diagnosis: the prototype worked on *one PDF at a time in Colab* — no batch processing, no crash recovery, no state tracking, no cloud path. Computer vision was new to the author; entering cloud engineering (AWS accounts, S3, RDS) began here |
 | **The database wall** | ~Jun – Dec 2025 (~6 months) | The parquet-built PLSS database (4.56M rows) **could not be loaded** in any free environment — Colab sessions died, local memory was insufficient, every workaround failed for half a year. Finally solved by moving the data to **AWS S3 and standing it up as a PostgreSQL/PostGIS database on RDS** — the single unlock that made coordinate resolution possible at scale, and the project's introduction to real cloud infrastructure |
 | **First public milestone** | Oct 22, 2025 | Standalone extraction over the prototype's modern-report outputs — county, Section–Township–Range, and GPS coordinates to spreadsheets — and the **first interactive well map**, published via a predecessor repo (`Oklahoma-Well-Locations`, GitHub Pages) and shared with Prof. Jaiswal |
+| **The U-Net suggestion** | Nov – Dec 2025 | In a project talk, Prof. Jaiswal suggests a learned detector for the grid dot — until then every dot was annotated by hand (render the grid image, point the dot, store the row/col cell), untenable at half-million scale. Study, implementation, and first training/testing of U-Net segmentation follow |
 | **The archive arrives** | Dec 2025 | The full corpus lands: ~571,000 scanned PDFs (13 ZIP archives, 1911–2024). Immediately exposed the true gap: a century of *layout variation* the single-form prototype had never seen. Months of studying PDF structures across eras — where the grid, STR, and county actually sit per decade — became the design foundation for the era-aware pipeline |
-| **Poster & talk** | Feb – Mar 2026 | A data-flow overview deck (Feb 10) becomes a plan (Feb 13): the professor gives the talk, the author presents the poster. Iterations through Feb 22, a recorded presentation Feb 23 — **poster at AAPG Orphaned/Abandoned/Idle/Marginal Wells, Tulsa, March 2026** |
+| **Poster & talk** | Feb – Mar 2026 | A data-flow overview deck (Feb 10) becomes a plan (Feb 13): the professor gives the talk, the author presents the poster. Iterations through Feb 22, a recorded presentation Feb 23 — **poster "Automated Extraction of Well Coordinates from Oklahoma 1002A Records" at the AAPG 4th Annual Orphan, Abandoned, Idle, and Marginal Wells conference, Tulsa, March 2026** |
 | **Production build begins** | May 15–23, 2026 | The modular repo: ZIP-native reading, per-record crash recovery, Vision OCR, Gemini county normalization, grid detection (OpenCV, 6 methods), first 1911-era QA set (95/100 grids detected, 94/94 hand-verified correct). First large benchmark — 4,607 records: grid 100%, county 99%, full STR 69%, dot 89%, 3,695 coordinates resolved. Repo consolidation (1-commit seed vs 56-commit working copy) recovered 4 QA assets; tracker schema settled at 44 columns |
 | **Coordinate resolution** | May 23–31, 2026 | The RDS PLSS database wired to a multi-pass resolver (§4.5); bilinear dot interpolation. Portability hardening: hardcoded paths → env vars, cv2 guards, S3 error handling, an 863-line `PIPELINE_BLUEPRINT.md` documenting every stage, schema, and threshold |
 | **First cloud batch** | late May 2026 | The AWS pipeline goes live: 391 processing slices dispatched, **2,439 wells extracted and mapped mid-run** to an S3-hosted viewer — the first proof of cloud-scale execution |
@@ -90,7 +91,7 @@ scanned PDF (ZIP / S3)
 | Compute (cloud) | AWS Batch on Fargate — deployed, 1,000-vCPU quota approved | 250 concurrent tasks ≈ full backlog in ~3 hours |
 | Publishing | GitHub Pages, monotonic rebuilds | A rebuild can add/update wells, never drop them |
 
-**Spend to date: roughly $70–160** (development-phase Vision + AWS storage/RDS). **To finish: ~$1,350–1,550**, dominated by Vision on the remaining ~470K scanned forms — a budget decision, not an engineering one.
+**Spend to date: roughly $600** (≈$300 Google Vision + ≈$300 AWS storage/RDS, per the project status accounting). **To finish: ~$1,570**, dominated by Vision on the remaining scanned forms — a budget decision, not an engineering one.
 
 ## 7. Incidents & Lessons
 
@@ -110,7 +111,7 @@ scanned PDF (ZIP / S3)
 - 3 queued annotation campaigns (c6/c7/c12) → free per-era envelope tuning
 - U-Net round-2 (1926–40 hollow-circle well marks)
 - Map payload optimization (52 MB JSON → tiling/clustering) as the corpus completes
-- *AAPG Bulletin* manuscript (drafted; poster presented at AAPG Orphaned/Abandoned/Idle/Marginal Wells, Tulsa, March 25–27, 2026)
+- *AAPG Bulletin* manuscript (drafted; poster "Automated Extraction of Well Coordinates from Oklahoma 1002A Records" presented at the AAPG 4th Annual Orphan, Abandoned, Idle, and Marginal Wells conference, Tulsa, March 25–27, 2026)
 
 ## 9. Session Logs
 

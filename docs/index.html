@@ -155,7 +155,7 @@
     transition: opacity .15s; letter-spacing: .3px;
   }
   .pdf-link:hover { opacity: .85; }
-  .s3-path { font-size: 9.5px; color: #3a4a60; margin-top: 6px; word-break: break-all; text-align: center; }
+  .s3-path { font-size: 9.5px; color: #5c5040; margin-top: 6px; word-break: break-all; text-align: center; }
 
   /* Quadrant cell highlight tooltip */
   .quadrant-tooltip {
@@ -290,11 +290,11 @@
   #header { background: linear-gradient(135deg, var(--bk-earth-dk) 0%, var(--bk-earth) 60%, var(--bk-earth-dk) 100%); box-shadow: 0 2px 10px rgba(60,45,20,.35); }
   #header h1 { font-family: 'Philosopher', serif; letter-spacing: .5px; }
   #header .subtitle { color: var(--bk-earth-soft); }
-  #well-count-badge { background: linear-gradient(135deg,#d98e2b,#e8b04b); color: #2b2010; box-shadow: 0 2px 6px rgba(217,142,43,.45); }
+  #well-count-badge { background: #fffdf7; color: #3c5c2a; border: 2px solid #dde7cf; box-shadow: 0 2px 6px rgba(30,40,20,.3); }
   .header-btn { background: rgba(255,253,247,.14); border: 1px solid rgba(255,253,247,.35); }
   .header-btn:hover { background: rgba(255,253,247,.28); }
   #sidebar { background: var(--bk-parch2); border-right: 2px solid var(--bk-line); backdrop-filter: none; }
-  .section-label { color: var(--bk-earth); border-bottom-color: var(--bk-earth-soft); }
+  .section-label { color: var(--bk-earth-dk); border-bottom-color: var(--bk-earth-soft); }
   input[type=text], select { background: var(--bk-card); border: 1.5px solid var(--bk-line); color: var(--bk-ink); }
   input[type=text]:focus, select:focus { border-color: var(--bk-earth); background: #fff; }
   input[type=text]::placeholder { color: #a09680; }
@@ -434,26 +434,26 @@
       <button class="reset-btn" onclick="resetFilters()">↺ Reset All Filters</button>
 
       <!-- Legend -->
-      <div class="section-label">Decades <span style="color:#3a4a60;font-size:9px;font-weight:400">(click one to see only those wells; click again to clear)</span></div>
+      <div class="section-label">Decades <span style="color:#5c5040;font-size:9px;font-weight:400">(click one to see only those wells; click again to clear)</span></div>
       <div id="legend"></div>
-      <div style="margin-top:8px;font-size:9.5px;color:#4a6070;line-height:1.7">
-        <span style="font-weight:700;color:#5a8090">📍 Teardrop</span> = precise location (within ~330 ft)<br>
-        <span style="font-weight:700;color:#5a8090">◎ Open ring</span> = approximate (within ±½ mile)
+      <div style="margin-top:8px;font-size:9.5px;color:#5c5040;line-height:1.7">
+        <span style="font-weight:700;color:#3c5c2a">📍 Teardrop</span> = precise location (within ~330 ft)<br>
+        <span style="font-weight:700;color:#3c5c2a">◎ Open ring</span> = approximate (within ±½ mile)
       </div>
 
       <!-- Data info -->
       <div class="section-label">About This Map</div>
-      <div style="font-size:10px;color:#3a4a60;line-height:1.6">
+      <div style="font-size:10px;color:#5c5040;line-height:1.6">
         Each pin was read automatically from the original scanned well record and checked
         against Oklahoma's land-survey grid.
-        <strong style="color:#5a7090">📍 Precise</strong> = located within about 330 feet.
-        <strong style="color:#5a7090">◎ Approx</strong> = somewhere within its square-mile section.
+        <strong style="color:#3c5c2a">📍 Precise</strong> = located within about 330 feet.
+        <strong style="color:#3c5c2a">◎ Approx</strong> = somewhere within its square-mile section.
         Open any pin to view the original document — and if something looks wrong, use
         ✏️ Verify / Fix; the map repairs itself from submissions.
         <br><br>
-        <strong style="color:#5a7090">Updated:</strong> <span id="data-updated">—</span>
+        <strong style="color:#3c5c2a">Updated:</strong> <span id="data-updated">—</span>
         <br>
-        <strong style="color:#5a7090">Source:</strong> Oklahoma State University well-records project
+        <strong style="color:#3c5c2a">Source:</strong> Oklahoma State University well-records project
       </div>
 
     </div>
@@ -651,7 +651,7 @@ function buildPopup(p) {
   const fmtDir = (v, pre) => {
     if (!v) return "";
     const s = String(v).trim().toUpperCase();
-    return /[NSEW]$/.test(s) ? `${pre}${s}` : `${pre}${s}<span style="color:#94a3b8">?</span>`;
+    return /[NSEW]$/.test(s) ? `${pre}${s}` : `${pre}${s}<span style="color:#8a7c62">?</span>`;
   };
   const plss = [
     p.section  ? `Sec ${p.section}` : "",
@@ -680,16 +680,16 @@ function buildPopup(p) {
     </span>
   </div>
   ${(p.cell_tl_lat && p.cell_br_lat) ? `
-  <div class="popup-row" style="border-top:1px solid rgba(245,158,11,.15);margin-top:4px;padding-top:6px">
-    <span class="lbl" style="color:#f59e0b">Cell area</span>
-    <span class="val" style="color:#fcd34d;font-size:10.5px">
+  <div class="popup-row" style="border-top:1px solid rgba(217,142,43,.4);margin-top:4px;padding-top:6px">
+    <span class="lbl" style="color:#9a6210">Cell area</span>
+    <span class="val" style="color:#7a5210;font-size:10.5px">
       ${(()=>{
         const ftNS = Math.round(Math.abs(p.cell_tl_lat - p.cell_bl_lat) * 364000);
         const ftEW = Math.round(Math.abs(p.cell_tl_lon - p.cell_tr_lon) * 288000);
         const acres = Math.round(ftNS * ftEW / 43560);
         return `~${ftNS}ft × ${ftEW}ft ≈ ${acres} acres`;
       })()}
-      <span style="color:#64748b;font-size:9px;display:block;margin-top:1px">highlighted on map — well is within this cell</span>
+      <span style="color:#8a7c62;font-size:9px;display:block;margin-top:1px">highlighted on the map — the well is inside this cell</span>
     </span>
   </div>` : ""}
   <div class="popup-row"><span class="lbl">Coordinates</span><span class="val coords">${(+p.lat).toFixed(5)}°N, ${(+p.lon).toFixed(5)}°W</span></div>
@@ -703,63 +703,63 @@ function buildPopup(p) {
     ? `<button class="pdf-link" style="cursor:pointer;border:none;width:100%"
        onclick="openPdfPanel('${pdfUrl}','${wellName || p.pdf_stem}','${(p.pdf_stem||"").replace(/'/g,"")}')">
        📄 View Original Well Record PDF</button>`
-    : '<div style="text-align:center;color:#6b7e99;font-size:11px;padding:6px">Original scan not yet available online</div>'}
+    : '<div style="text-align:center;color:#8a7c62;font-size:11px;padding:6px">Original scan not yet available online</div>'}
   <div style="display:flex;gap:6px;margin-top:6px">
     <a href="${googleMapsLink}" target="_blank" rel="noopener"
-       style="flex:1;text-align:center;padding:6px;background:rgba(255,255,255,.06);
-              border:1px solid rgba(255,255,255,.1);border-radius:6px;
-              color:#90bce0;font-size:10px;text-decoration:none;">
+       style="flex:1;text-align:center;padding:6px;background:rgba(87,128,62,.08);
+              border:1.5px solid #cfe0bd;border-radius:6px;
+              color:#3c5c2a;font-weight:700;font-size:10px;text-decoration:none;">
       🗺️ Google Maps
     </a>
     <span onclick="navigator.clipboard.writeText('${(+p.lat).toFixed(6)},${(+p.lon).toFixed(6)}')"
-       style="flex:1;text-align:center;padding:6px;background:rgba(255,255,255,.06);
-              border:1px solid rgba(255,255,255,.1);border-radius:6px;
-              color:#90bce0;font-size:10px;cursor:pointer;">
+       style="flex:1;text-align:center;padding:6px;background:rgba(87,128,62,.08);
+              border:1.5px solid #cfe0bd;border-radius:6px;
+              color:#3c5c2a;font-weight:700;font-size:10px;cursor:pointer;">
       📋 Copy Coords
     </span>
     <span onclick="openVerify('${(p.pdf_stem||"").replace(/'/g,"")}')"
-       style="flex:1;text-align:center;padding:6px;background:rgba(245,158,11,.12);
-              border:1px solid rgba(245,158,11,.3);border-radius:6px;
-              color:#fcd34d;font-size:10px;cursor:pointer;">
+       style="flex:1;text-align:center;padding:6px;background:#f9edd6;
+              border:1.5px solid #d98e2b;border-radius:6px;
+              color:#8a5a10;font-weight:700;font-size:10px;cursor:pointer;">
       ✏️ Verify / Fix
     </span>
   </div>
   <div id="fixpanel-${(p.pdf_stem||"").replace(/'/g,"")}" style="display:none;margin-top:8px;
-       padding:8px;background:rgba(245,158,11,.06);border:1px solid rgba(245,158,11,.25);
+       padding:8px;background:#fbf4e4;border:1.5px solid #e3c98f;
        border-radius:6px">
-    <div style="color:#fcd34d;font-size:10px;margin-bottom:6px">
-      Compare with the PDF, correct any field, then submit. Leave fields unchanged if right.
+    <div style="color:#8a5a10;font-size:10px;margin-bottom:6px">
+      Compare with the document, correct any field, then submit. Leave fields unchanged if right.
     </div>
     ${["section","township","range","county","quadrant"].map(f => `
       <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
-        <span style="width:62px;color:#94a3b8;font-size:10px">${f}</span>
+        <span style="width:62px;color:#7c6f58;font-weight:700;font-size:10px">${f}</span>
         <input id="fix-${f}-${(p.pdf_stem||"").replace(/'/g,"")}"
                value="${(p[f]||"").toString().replace(/"/g,"&quot;")}"
-               style="flex:1;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.15);
-                      border-radius:4px;color:#e2e8f0;font-size:11px;padding:3px 6px"/>
+               style="flex:1;background:#fffdf7;border:1.5px solid #d8ccb0;
+                      border-radius:4px;color:#33291f;font-size:11px;padding:3px 6px"/>
       </div>`).join("")}
-    <div style="color:#7dd3fc;font-size:9.5px;margin:6px 0 3px;border-top:1px solid rgba(255,255,255,.08);padding-top:5px">
+    <div style="color:#2e6f95;font-size:9.5px;margin:6px 0 3px;border-top:1px solid #e8dcc2;padding-top:5px">
       If the record itself prints a latitude/longitude, enter it here — it will be
       applied exactly as given.
     </div>
     ${[["lat","Latitude"],["lon","Longitude"]].map(([f,lbl]) => `
       <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
-        <span style="width:62px;color:#94a3b8;font-size:10px">${lbl}</span>
+        <span style="width:62px;color:#7c6f58;font-weight:700;font-size:10px">${lbl}</span>
         <input id="fix-${f}-${(p.pdf_stem||"").replace(/'/g,"")}"
                value="${(p[f]==null||p[f]==="")?"":(+p[f]).toFixed(6)}"
                placeholder="decimal degrees"
-               style="flex:1;background:rgba(0,0,0,.3);border:1px solid rgba(125,211,252,.25);
-                      border-radius:4px;color:#e2e8f0;font-size:11px;padding:3px 6px"/>
+               style="flex:1;background:#fffdf7;border:1.5px solid #bcd4e6;
+                      border-radius:4px;color:#33291f;font-size:11px;padding:3px 6px"/>
       </div>`).join("")}
     <div style="display:flex;gap:6px;margin-top:6px">
       <span onclick="submitFix('${(p.pdf_stem||"").replace(/'/g,"")}', true)"
-            style="flex:1;text-align:center;padding:5px;background:rgba(34,197,94,.15);
-                   border:1px solid rgba(34,197,94,.4);border-radius:5px;
-                   color:#86efac;font-size:10px;cursor:pointer">✓ All correct</span>
+            style="flex:1;text-align:center;padding:5px;background:#e5efdb;
+                   border:1.5px solid #57803e;border-radius:5px;
+                   color:#2f5220;font-weight:700;font-size:10px;cursor:pointer">✓ All correct</span>
       <span onclick="submitFix('${(p.pdf_stem||"").replace(/'/g,"")}', false)"
-            style="flex:1;text-align:center;padding:5px;background:rgba(245,158,11,.15);
-                   border:1px solid rgba(245,158,11,.4);border-radius:5px;
-                   color:#fcd34d;font-size:10px;cursor:pointer">Submit fix</span>
+            style="flex:1;text-align:center;padding:5px;background:linear-gradient(135deg,#d98e2b,#e8b04b);
+                   border:none;border-radius:5px;
+                   color:#2b2010;font-weight:700;font-size:10px;cursor:pointer">Submit fix</span>
     </div>
   </div>
   <div class="s3-path">${pdfUrl ? "Original scanned record available" : ""}</div>
@@ -864,11 +864,11 @@ function showQuadrantHighlight(p) {
 
   quadrantLayer.bindTooltip(
     `<div style="font-size:11px;line-height:1.5">
-      <strong style="color:${borderColor}">📍 PLSS Quadrant Cell</strong><br>
+      <strong style="color:#9a6210">📍 Survey grid cell</strong><br>
       <b>${p.quadrant || "unknown"}</b><br>
       Sec ${p.section || "?"}  T${p.township || "?"}  R${p.range || "?"}<br>
-      <span style="color:#aaa">~${ftNS}ft × ${ftEW}ft  ≈ ${acres} acres</span><br>
-      <span style="color:#aaa">AI dot confidence: ${conf}%</span>
+      <span style="color:#8a7c62">~${ftNS}ft × ${ftEW}ft  ≈ ${acres} acres</span><br>
+      <span style="color:#8a7c62">Reading confidence: ${conf}%</span>
     </div>`,
     { sticky: false, opacity: 0.95, className: "quadrant-tooltip" }
   );
@@ -894,7 +894,7 @@ function renderMarkers(features) {
       return L.divIcon({
         html: `<div style="
           width:${size}px; height:${size}px; border-radius:50%;
-          background:rgba(13,45,82,.85);
+          background:rgba(60,92,42,.9);
           border:2.5px solid rgba(255,255,255,.8);
           box-shadow:0 2px 8px rgba(0,0,0,.6);
           display:flex; align-items:center; justify-content:center;

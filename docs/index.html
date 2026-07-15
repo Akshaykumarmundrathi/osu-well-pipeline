@@ -348,6 +348,9 @@
   .pdf-panel-close:hover { background: rgba(255,253,247,.3); }
   .pdf-no-url { color: var(--bk-ink-soft); }
   .gm-style-btn { background: var(--bk-card); color: var(--bk-ink); }
+  .legend-row.active-decade { background: rgba(87,128,62,.16); font-weight: 700; }
+  .legend-row.dimmed { opacity: .4; }
+  .legend-row.dimmed:hover { opacity: .8; }
 
 </style>
 </head>
@@ -367,7 +370,7 @@
   <div class="logo">🛢️</div>
   <div>
     <h1>OSU Oklahoma Well Records — Interactive Map</h1>
-    <div class="subtitle">Historical oil &amp; gas well permits 1911–2024 · OCR / AI pipeline · GPS coordinates extracted from scanned PDFs</div>
+    <div class="subtitle">Every pin is a historical Oklahoma oil &amp; gas well (1911–2024), located automatically from its original scanned record</div>
   </div>
   <button class="header-btn" onclick="toggleSidebar()">☰ Filters</button>
   <button class="header-btn" onclick="fitOklahoma()">📍 Oklahoma</button>
@@ -381,65 +384,55 @@
     <div id="sidebar-inner">
 
       <!-- Stats -->
-      <div class="section-label">Dataset Statistics</div>
+      <div class="section-label">At a Glance</div>
       <div class="stat-grid">
         <div class="stat-box"><div class="val" id="stat-total">—</div><div class="lbl">Wells Mapped</div></div>
         <div class="stat-box"><div class="val" id="stat-counties">—</div><div class="lbl">Counties</div></div>
         <div class="stat-box"><div class="val" id="stat-year-min">—</div><div class="lbl">Earliest</div></div>
         <div class="stat-box"><div class="val" id="stat-year-max">—</div><div class="lbl">Latest</div></div>
-        <div class="stat-box"><div class="val" id="stat-precise">—</div><div class="lbl">Precise 📍</div></div>
-        <div class="stat-box"><div class="val" id="stat-approx">—</div><div class="lbl">Approx ◎</div></div>
+        <div class="stat-box"><div class="val" id="stat-precise">—</div><div class="lbl">📍 Precise</div></div>
+        <div class="stat-box"><div class="val" id="stat-approx">—</div><div class="lbl">◎ Approx</div></div>
       </div>
 
-      <!-- Resolution source breakdown -->
-      <div class="section-label">Coordinate Sources</div>
-      <div id="source-breakdown" style="font-size:10px;color:#4a6070;line-height:1.8"></div>
-
       <!-- Filters -->
-      <div class="section-label">Filter Wells</div>
-      <input type="text" id="search-county" placeholder="🔍 County name...">
-      <input type="text" id="search-wellname" placeholder="🔍 Well name or API number...">
-      <select id="filter-collection"><option value="">All Collections (1–13)</option></select>
-      <select id="filter-decade"><option value="">All Decades</option></select>
+      <div class="section-label">Find Wells</div>
+      <input type="text" id="search-county" placeholder="🔍 Search by county...">
+      <input type="text" id="search-wellname" placeholder="🔍 Search by well name or API #...">
       <select id="filter-resolution">
-        <option value="">All Resolution Types</option>
-        <option value="quadrant_direct">Quadrant Direct (precise)</option>
-        <option value="p4_quadrant_direct">Pass 4 — Lease Inferred (precise)</option>
-        <option value="section_centroid">Section Centroid (approx ±½ mi)</option>
-        <option value="p3_">Pass 3 — County Inferred (precise)</option>
+        <option value="">Location precision: all</option>
+        <option value="precise">📍 Precise pins only (~330 ft)</option>
+        <option value="approx">◎ Approximate rings only (±½ mile)</option>
       </select>
       <select id="filter-flags">
-        <option value="">Flags: show all</option>
-        <option value="clean">Hide flagged wells</option>
-        <option value="flagged">Only flagged wells</option>
+        <option value="">All wells</option>
+        <option value="clean">Hide wells with warnings</option>
+        <option value="flagged">Only wells with warnings</option>
         <option value="verified">Only human-verified ✅</option>
       </select>
       <button class="filter-btn" onclick="applyFilters()">Apply Filters</button>
       <button class="reset-btn" onclick="resetFilters()">↺ Reset All Filters</button>
 
       <!-- Legend -->
-      <div class="section-label">Decade Legend <span style="color:#3a4a60;font-size:9px;font-weight:400">(click to toggle)</span></div>
+      <div class="section-label">Decades <span style="color:#3a4a60;font-size:9px;font-weight:400">(click one to see only those wells; click again to clear)</span></div>
       <div id="legend"></div>
       <div style="margin-top:8px;font-size:9.5px;color:#4a6070;line-height:1.7">
-        <span style="font-weight:700;color:#5a8090">📍 Teardrop</span> = precise (dot-interpolated, ~330 ft)<br>
-        <span style="font-weight:700;color:#5a8090">◎ Open ring</span> = approx section centroid (±½ mi)
+        <span style="font-weight:700;color:#5a8090">📍 Teardrop</span> = precise location (within ~330 ft)<br>
+        <span style="font-weight:700;color:#5a8090">◎ Open ring</span> = approximate (within ±½ mile)
       </div>
 
-      <!-- Top Counties -->
-      <div class="section-label">Top Counties</div>
-      <div id="county-list"></div>
-
       <!-- Data info -->
-      <div class="section-label">About This Dataset</div>
+      <div class="section-label">About This Map</div>
       <div style="font-size:10px;color:#3a4a60;line-height:1.6">
-        Coordinates resolved via multi-pass PLSS pipeline from scanned Oklahoma oil &amp; gas well permit PDFs (1911–2024).
-        <strong style="color:#5a7090">📍 Precise</strong> = dot position interpolated within ¼-section (~330 ft).
-        <strong style="color:#5a7090">◎ Approx</strong> = section centroid only (±½ mile); shown as open rings on the map.
-        Pipeline: Google Vision OCR → Gemini Flash AI → PostgreSQL PLSS lookup → 5-pass coordinate resolver.
+        Each pin was read automatically from the original scanned well record and checked
+        against Oklahoma's land-survey grid.
+        <strong style="color:#5a7090">📍 Precise</strong> = located within about 330 feet.
+        <strong style="color:#5a7090">◎ Approx</strong> = somewhere within its square-mile section.
+        Open any pin to view the original document — and if something looks wrong, use
+        ✏️ Verify / Fix; the map repairs itself from submissions.
         <br><br>
         <strong style="color:#5a7090">Updated:</strong> <span id="data-updated">—</span>
         <br>
-        <strong style="color:#5a7090">Source:</strong> OSU Well Records
+        <strong style="color:#5a7090">Source:</strong> Oklahoma State University well-records project
       </div>
 
     </div>
@@ -483,7 +476,7 @@ let allFeatures    = [];
 let markerLayer    = null;
 let quadrantLayer  = null;   // highlighted PLSS cell polygon
 let map            = null;
-let hiddenDecades  = new Set();
+let selectedDecades = new Set();   // empty = show every decade
 let sidebarOpen    = true;
 let quickSearchVal = "";
 
@@ -614,6 +607,18 @@ function makePin(decade, confidence, resolution) {
 // ─── Popup ────────────────────────────────────────────────────────────────────
 function confClass(c) { return c >= 90 ? "good" : c >= 70 ? "warn" : ""; }
 
+// Translate internal resolution labels into plain english for the popup
+function friendlyResolution(r) {
+  const v = (r || "").toLowerCase();
+  if (!v)                          return "—";
+  if (v.includes("direct_latlong")) return "Printed on the record";
+  if (v.includes("corrected"))      return "Human-corrected";
+  if (v.includes("centroid"))       return "Section center (approximate)";
+  if (v.includes("quadrant"))       return "Hand-drawn dot on the record grid";
+  if (v.startsWith("p3") || v.startsWith("p4")) return "Inferred from county records";
+  return "Automated reading";
+}
+
 function buildPopup(p) {
   const nameParts = (p.pdf_stem || "").split("_");
   const wellName  = nameParts.length >= 2 ? nameParts.slice(1, -1).join(" ") : p.pdf_stem;
@@ -643,15 +648,14 @@ function buildPopup(p) {
   <div class="well-id">API: ${apino} &nbsp;·&nbsp; Record ID: ${wellId}</div>
 </div>
 <div class="popup-body">
-  <div class="popup-row"><span class="lbl">Collection</span><span class="val">Col. ${p.collection || "?"} &nbsp;(${p.decade || "—"})</span></div>
+  <div class="popup-row"><span class="lbl">Decade</span><span class="val">${p.decade || "—"}</span></div>
   <div class="popup-row"><span class="lbl">Filed</span><span class="val">${p.year || "—"}${p.month ? " &bull; " + p.month.replace(/^\d+ - /, "") : ""}</span></div>
   <div class="popup-row"><span class="lbl">County</span><span class="val">${p.county || "—"}</span></div>
   <div class="popup-row"><span class="lbl">PLSS Location</span><span class="val">${plss || "—"}</span></div>
   <div class="popup-row">
-    <span class="lbl">Quadrant</span>
+    <span class="lbl">Grid cell</span>
     <span class="val">
       ${p.quadrant ? `<span class="quadrant-badge">${p.quadrant}</span>` : "—"}
-      ${p.quadrant_source ? `<span style="color:#64748b;font-size:9.5px;margin-left:5px">(${p.quadrant_source})</span>` : ""}
     </span>
   </div>
   ${(p.cell_tl_lat && p.cell_br_lat) ? `
@@ -668,8 +672,8 @@ function buildPopup(p) {
     </span>
   </div>` : ""}
   <div class="popup-row"><span class="lbl">Coordinates</span><span class="val coords">${(+p.lat).toFixed(5)}°N, ${(+p.lon).toFixed(5)}°W</span></div>
-  <div class="popup-row"><span class="lbl">Resolution</span><span class="val">${p.resolution || "—"}</span></div>
-  <div class="popup-row"><span class="lbl">AI Confidence</span><span class="val ${confClass(p.confidence)}">${p.confidence}%</span></div>
+  <div class="popup-row"><span class="lbl">How it was located</span><span class="val">${friendlyResolution(p.resolution)}</span></div>
+  <div class="popup-row"><span class="lbl">Reading confidence</span><span class="val ${confClass(p.confidence)}">${p.confidence}%</span></div>
   ${p.flags ? `<div class="popup-row"><span class="lbl">Flags</span><span class="val warn">${p.flags}</span></div>` : ""}
   ${p.verified ? `<div class="popup-row"><span class="lbl">Verified</span><span class="val" style="color:#27ae60;font-weight:700">✅ Human-verified</span></div>` : ""}
 </div>
@@ -678,7 +682,7 @@ function buildPopup(p) {
     ? `<button class="pdf-link" style="cursor:pointer;border:none;width:100%"
        onclick="openPdfPanel('${pdfUrl}','${wellName || p.pdf_stem}')">
        📄 View Original Well Record PDF</button>`
-    : '<div style="text-align:center;color:#6b7e99;font-size:11px;padding:6px">PDF not yet on S3</div>'}
+    : '<div style="text-align:center;color:#6b7e99;font-size:11px;padding:6px">Original scan not yet available online</div>'}
   <div style="display:flex;gap:6px;margin-top:6px">
     <a href="${googleMapsLink}" target="_blank" rel="noopener"
        style="flex:1;text-align:center;padding:6px;background:rgba(255,255,255,.06);
@@ -714,8 +718,8 @@ function buildPopup(p) {
                       border-radius:4px;color:#e2e8f0;font-size:11px;padding:3px 6px"/>
       </div>`).join("")}
     <div style="color:#7dd3fc;font-size:9.5px;margin:6px 0 3px;border-top:1px solid rgba(255,255,255,.08);padding-top:5px">
-      Direct coordinates — if the PDF prints a latitude/longitude, enter it here to
-      override (use for <code>direct_latlong</code> records or any wrong resolution).
+      If the record itself prints a latitude/longitude, enter it here — it will be
+      applied exactly as given.
     </div>
     ${[["lat","Latitude"],["lon","Longitude"]].map(([f,lbl]) => `
       <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
@@ -912,40 +916,6 @@ function updateStats(features) {
   document.getElementById("stat-precise").textContent  = precise.toLocaleString();
   document.getElementById("stat-approx").textContent   = approx.toLocaleString();
   document.getElementById("well-count-badge").textContent = `${features.length.toLocaleString()} Wells`;
-  renderSourceBreakdown(features);
-}
-
-// Group raw resolution labels into reader-friendly buckets
-const SOURCE_BUCKETS = [
-  ["quadrant_direct",      "Quadrant direct (precise)"],
-  ["p4_",                  "Lease-inferred quadrant (precise)"],
-  ["county_pinned",        "County-pinned direction fix"],
-  ["section_centroid",     "Section centroid (approx)"],
-  ["direct_latlong",       "Direct lat/lon on form"],
-  ["corrected",            "User-corrected via map"],
-  ["p3_",                  "County-inferred (precise)"],
-];
-function renderSourceBreakdown(features) {
-  const counts = {};
-  let other = 0;
-  features.forEach(f => {
-    const r = (f.properties.resolution || "unknown").toLowerCase();
-    const bucket = SOURCE_BUCKETS.find(([pre]) => r.startsWith(pre));
-    if (bucket) counts[bucket[1]] = (counts[bucket[1]] || 0) + 1;
-    else other++;
-  });
-  const total = features.length || 1;
-  const rows = SOURCE_BUCKETS
-    .filter(([,label]) => counts[label])
-    .map(([,label]) => {
-      const n = counts[label];
-      const pct = Math.round(n * 1000 / total) / 10;
-      return `<div style="display:flex;justify-content:space-between;gap:6px">
-        <span>${label}</span><span style="color:#5a8090;font-weight:700">${n.toLocaleString()} · ${pct}%</span></div>`;
-    });
-  if (other) rows.push(`<div style="display:flex;justify-content:space-between;gap:6px">
-        <span>Other</span><span style="color:#5a8090;font-weight:700">${other.toLocaleString()}</span></div>`);
-  document.getElementById("source-breakdown").innerHTML = rows.join("") || "—";
 }
 
 function buildLegend() {
@@ -962,50 +932,31 @@ function buildLegend() {
 }
 
 function toggleDecade(decade, row) {
-  if (hiddenDecades.has(decade)) { hiddenDecades.delete(decade); row.classList.remove("hidden-decade"); }
-  else { hiddenDecades.add(decade); row.classList.add("hidden-decade"); }
+  if (selectedDecades.has(decade)) selectedDecades.delete(decade);
+  else selectedDecades.add(decade);
+  document.querySelectorAll(".legend-row").forEach(r => {
+    const on = selectedDecades.has(r.dataset.decade);
+    r.classList.toggle("active-decade", on);
+    r.classList.toggle("dimmed", selectedDecades.size > 0 && !on);
+  });
   applyFilters();
-}
-
-function buildCountyList(features) {
-  const cnt = {};
-  features.forEach(f => { const c = f.properties.county; if (c) cnt[c] = (cnt[c]||0)+1; });
-  const sorted = Object.entries(cnt).sort((a,b) => b[1]-a[1]).slice(0, 15);
-  const max    = sorted[0]?.[1] || 1;
-  document.getElementById("county-list").innerHTML = sorted.map(([name, n]) => `
-    <div class="county-item">
-      <span>${name}</span>
-      <div class="county-bar-wrap"><div class="county-bar" style="width:${Math.round(n/max*100)}%"></div></div>
-      <span style="color:#60a5fa;font-weight:700;min-width:28px;text-align:right">${n}</span>
-    </div>`).join("");
-}
-
-function populateDropdowns(features) {
-  const cols   = [...new Set(features.map(f => f.properties.collection))].filter(Boolean).sort((a,b)=>+a-+b);
-  const decades = [...new Set(features.map(f => f.properties.decade))].filter(Boolean).sort();
-  const colSel  = document.getElementById("filter-collection");
-  const decSel  = document.getElementById("filter-decade");
-  cols.forEach(c => { const o = document.createElement("option"); o.value = c; o.textContent = `Collection ${c}`; colSel.appendChild(o); });
-  decades.forEach(d => { const o = document.createElement("option"); o.value = d; o.textContent = d; decSel.appendChild(o); });
 }
 
 // ─── Filtering ────────────────────────────────────────────────────────────────
 function applyFilters() {
   const county  = document.getElementById("search-county").value.toLowerCase().trim();
   const well    = document.getElementById("search-wellname").value.toLowerCase().trim();
-  const col     = document.getElementById("filter-collection").value;
-  const decade  = document.getElementById("filter-decade").value;
   const resol   = document.getElementById("filter-resolution").value;
   const flagSel = document.getElementById("filter-flags").value;
   const qs      = quickSearchVal.toLowerCase().trim();
 
   const filtered = allFeatures.filter(f => {
     const p = f.properties;
-    if (hiddenDecades.has(p.decade))                                                         return false;
+    if (selectedDecades.size > 0 && !selectedDecades.has(p.decade))                          return false;
     if (county && !(p.county||"").toLowerCase().includes(county))                            return false;
-    if (col    && p.collection !== col)                                                      return false;
-    if (decade && p.decade !== decade)                                                       return false;
-    if (resol  && !(p.resolution||"").toLowerCase().includes(resol))                         return false;
+    const isApprox = (p.resolution||"").toLowerCase().includes("centroid");
+    if (resol === "precise" && isApprox)                                                     return false;
+    if (resol === "approx"  && !isApprox)                                                    return false;
     if (flagSel === "clean"    && p.flags)                                                   return false;
     if (flagSel === "flagged"  && !p.flags)                                                  return false;
     if (flagSel === "verified" && !p.verified)                                               return false;
@@ -1016,15 +967,14 @@ function applyFilters() {
 
   renderMarkers(filtered);
   updateStats(filtered);
-  buildCountyList(filtered);
 }
 
 function resetFilters() {
   ["search-county","search-wellname","quick-search"].forEach(id => document.getElementById(id).value = "");
-  ["filter-collection","filter-decade","filter-resolution","filter-flags"].forEach(id => document.getElementById(id).value = "");
-  hiddenDecades.clear();
+  ["filter-resolution","filter-flags"].forEach(id => document.getElementById(id).value = "");
+  selectedDecades.clear();
   quickSearchVal = "";
-  document.querySelectorAll(".legend-row").forEach(r => r.classList.remove("hidden-decade"));
+  document.querySelectorAll(".legend-row").forEach(r => r.classList.remove("active-decade", "dimmed"));
   applyFilters();
 }
 
@@ -1070,9 +1020,7 @@ async function loadData() {
 
     detail.textContent = `Rendering ${allFeatures.length.toLocaleString()} well markers...`;
 
-    populateDropdowns(allFeatures);
     buildLegend();
-    buildCountyList(allFeatures);
     updateStats(allFeatures);
     renderMarkers(allFeatures);
 
@@ -1094,10 +1042,9 @@ async function loadData() {
   } catch (err) {
     console.error(err);
     document.getElementById("load-detail").innerHTML =
-      `<strong style="color:#f87171">Failed to load well data</strong><br>
+      `<strong style="color:#f87171">Couldn't load the well data</strong><br>
        ${err.message}<br><br>
-       Run locally: <code>python merge_well_locations.py && python deploy_viewer.py</code><br>
-       Or open <code>well_map_standalone.html</code> for offline use.`;
+       Please refresh the page — if it keeps happening, try again in a few minutes.`;
   }
 }
 

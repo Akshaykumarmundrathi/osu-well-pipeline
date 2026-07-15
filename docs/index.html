@@ -14,6 +14,11 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css"/>
 <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
 
+<!-- Theme fonts (matches the project case study) -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Philosopher:wght@400;700&family=Nunito+Sans:wght@400;600;700&display=swap" rel="stylesheet">
+
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Segoe UI', Arial, sans-serif; display: flex; flex-direction: column; height: 100vh; background: #1a1a2e; color: #eee; }
@@ -272,6 +277,78 @@
     color: #6b7e99; font-size: 13px; text-align: center; padding: 24px;
   }
 
+  /* ── Book of Earth theme overrides (visual only; no functional changes).
+        Matches the project case study & portfolio at
+        akshaykumarmundrathi.github.io/Portfolio ── */
+  :root {
+    --bk-parch: #f3ead8; --bk-parch2: #efe6cf; --bk-card: #fffdf7;
+    --bk-ink: #33291f; --bk-ink-soft: #5c5040;
+    --bk-earth: #57803e; --bk-earth-dk: #3c5c2a; --bk-earth-soft: #dde7cf;
+    --bk-line: #d8ccb0;
+  }
+  body { background: var(--bk-parch); color: var(--bk-ink); font-family: 'Nunito Sans','Segoe UI',Arial,sans-serif; }
+  #header { background: linear-gradient(135deg, var(--bk-earth-dk) 0%, var(--bk-earth) 60%, var(--bk-earth-dk) 100%); box-shadow: 0 2px 10px rgba(60,45,20,.35); }
+  #header h1 { font-family: 'Philosopher', serif; letter-spacing: .5px; }
+  #header .subtitle { color: var(--bk-earth-soft); }
+  #well-count-badge { background: linear-gradient(135deg,#d98e2b,#e8b04b); color: #2b2010; box-shadow: 0 2px 6px rgba(217,142,43,.45); }
+  .header-btn { background: rgba(255,253,247,.14); border: 1px solid rgba(255,253,247,.35); }
+  .header-btn:hover { background: rgba(255,253,247,.28); }
+  #sidebar { background: var(--bk-parch2); border-right: 2px solid var(--bk-line); backdrop-filter: none; }
+  .section-label { color: var(--bk-earth); border-bottom-color: var(--bk-earth-soft); }
+  input[type=text], select { background: var(--bk-card); border: 1.5px solid var(--bk-line); color: var(--bk-ink); }
+  input[type=text]:focus, select:focus { border-color: var(--bk-earth); background: #fff; }
+  input[type=text]::placeholder { color: #a09680; }
+  select option { background: var(--bk-card); color: var(--bk-ink); }
+  button.filter-btn { background: linear-gradient(135deg, var(--bk-earth-dk), var(--bk-earth)); }
+  button.reset-btn { border: 1px solid var(--bk-line); color: var(--bk-ink-soft); }
+  button.reset-btn:hover { background: rgba(87,128,62,.08); color: var(--bk-ink); }
+  .stat-box { background: var(--bk-card); border: 1px solid var(--bk-earth-soft); }
+  .stat-box .val { color: var(--bk-earth); }
+  .stat-box .lbl { color: var(--bk-ink-soft); }
+  .legend-row:hover { background: rgba(87,128,62,.1); }
+  .legend-dot { border-color: rgba(0,0,0,.25); }
+  .legend-row.hidden-decade span { color: #b3a88e; }
+  .county-item { border-bottom-color: var(--bk-earth-soft); }
+  .county-bar-wrap { background: rgba(87,128,62,.12); }
+  .county-bar { background: linear-gradient(90deg, var(--bk-earth-dk), var(--bk-earth)); }
+  .leaflet-control-layers { background: var(--bk-card) !important; color: var(--bk-ink) !important; border: 1.5px solid var(--bk-line) !important; }
+  .leaflet-control-layers label { color: var(--bk-ink) !important; }
+  .leaflet-control-layers-separator { border-color: var(--bk-earth-soft) !important; }
+  .leaflet-popup-content-wrapper { background: var(--bk-card); color: var(--bk-ink); border: 2px solid var(--bk-earth-soft); box-shadow: 0 12px 40px rgba(60,45,20,.35); backdrop-filter: none; }
+  .leaflet-popup-tip { background: var(--bk-card); }
+  .popup-header { background: linear-gradient(135deg, var(--bk-earth), var(--bk-earth-dk)); border-bottom-color: var(--bk-earth-soft); }
+  .popup-header .well-id { color: var(--bk-earth-soft); }
+  .popup-row { border-bottom-color: #efe8d5; }
+  .popup-row .lbl { color: #8a7c62; }
+  .popup-row .val { color: var(--bk-ink); }
+  .popup-row .val.good { color: #3c7a2a; }
+  .popup-row .val.warn { color: #b06a10; }
+  .popup-row .val.coords { color: var(--bk-earth); }
+  .popup-footer { border-top-color: #efe8d5; }
+  .pdf-link { background: linear-gradient(135deg, var(--bk-earth-dk), var(--bk-earth)); }
+  .s3-path { color: #b3a88e; }
+  .quadrant-tooltip { background: var(--bk-card) !important; border: 1.5px solid #d98e2b !important; color: var(--bk-ink) !important; box-shadow: 0 4px 12px rgba(60,45,20,.3) !important; font-family: 'Nunito Sans','Segoe UI',Arial,sans-serif !important; }
+  .quadrant-badge { background: rgba(217,142,43,.15); border-color: rgba(217,142,43,.5); color: #9a6210; }
+  #loading { background: var(--bk-parch); }
+  #loading h2 { color: var(--bk-ink); font-family: 'Philosopher', serif; }
+  #loading p { color: var(--bk-ink-soft); }
+  #load-detail { color: #a09680; }
+  #loading .spinner { border-color: rgba(87,128,62,.25); border-top-color: var(--bk-earth); }
+  .leaflet-control-scale-line { background: rgba(255,253,247,.9) !important; color: var(--bk-ink) !important; border-color: var(--bk-ink-soft) !important; }
+  ::-webkit-scrollbar-thumb { background: rgba(87,128,62,.4); }
+  #search-bar { background: rgba(255,253,247,.94); border: 1.5px solid var(--bk-earth); box-shadow: 0 4px 16px rgba(60,45,20,.25); }
+  #search-bar input { color: var(--bk-ink); }
+  #search-bar input::placeholder { color: #a09680; }
+  #search-bar .search-icon { color: var(--bk-earth); }
+  #pdf-panel { background: var(--bk-parch2); border-left: 2px solid var(--bk-earth); box-shadow: -8px 0 40px rgba(60,45,20,.4); }
+  .pdf-panel-hdr { background: linear-gradient(135deg, var(--bk-earth), var(--bk-earth-dk)); border-bottom-color: var(--bk-earth-soft); }
+  .pdf-panel-hdr a.pdf-ext { color: #f0e6c8; border-color: rgba(255,253,247,.4); }
+  .pdf-panel-hdr a.pdf-ext:hover { background: rgba(255,253,247,.18); }
+  .pdf-panel-close { background: rgba(255,253,247,.16); }
+  .pdf-panel-close:hover { background: rgba(255,253,247,.3); }
+  .pdf-no-url { color: var(--bk-ink-soft); }
+  .gm-style-btn { background: var(--bk-card); color: var(--bk-ink); }
+
 </style>
 </head>
 <body>
@@ -294,6 +371,7 @@
   </div>
   <button class="header-btn" onclick="toggleSidebar()">☰ Filters</button>
   <button class="header-btn" onclick="fitOklahoma()">📍 Oklahoma</button>
+  <a class="header-btn" style="text-decoration:none" href="https://akshaykumarmundrathi.github.io/Portfolio/well-case-study.html" target="_blank" rel="noopener">📜 Case Study</a>
   <div id="well-count-badge">Loading...</div>
 </div>
 

@@ -351,6 +351,27 @@
   .legend-row.active-decade { background: rgba(87,128,62,.16); font-weight: 700; }
   .legend-row.dimmed { opacity: .4; }
   .legend-row.dimmed:hover { opacity: .8; }
+  #pdf-panel { width: min(650px, 94vw); right: calc(-1 * min(650px, 94vw) - 12px); }
+  #pdf-panel.open { right: 0; }
+  #panel-fix { flex-shrink: 0; border-top: 3px solid var(--bk-earth); background: var(--bk-parch2); }
+  #panel-fix-toggle {
+    width: 100%; border: none; background: var(--bk-earth); color: #fff;
+    font-weight: 700; font-size: 12px; padding: 9px; cursor: pointer; letter-spacing: .3px;
+  }
+  #panel-fix-toggle:hover { background: var(--bk-earth-dk); }
+  #panel-fix-body { padding: 10px 14px 12px; max-height: 42vh; overflow-y: auto; }
+  .pfix-note { font-size: 10.5px; color: var(--bk-ink-soft); margin-bottom: 8px; line-height: 1.5; }
+  .pfix-grid { display: grid; grid-template-columns: 82px 1fr; gap: 5px 8px; align-items: center; }
+  .pfix-grid label { font-size: 10.5px; color: var(--bk-ink-soft); font-weight: 700; }
+  .pfix-grid input {
+    width: 100%; padding: 5px 8px; border: 1.5px solid var(--bk-line); border-radius: 5px;
+    background: var(--bk-card); color: var(--bk-ink); font-size: 12px; margin: 0;
+  }
+  .pfix-grid input:focus { outline: none; border-color: var(--bk-earth); }
+  .pfix-actions { display: flex; gap: 8px; margin-top: 10px; }
+  .pfix-actions button { flex: 1; padding: 7px; border-radius: 6px; font-size: 11.5px; font-weight: 700; cursor: pointer; }
+  .pfix-ok { background: #e5efdb; border: 1.5px solid var(--bk-earth); color: var(--bk-earth-dk); }
+  .pfix-submit { background: linear-gradient(135deg,#d98e2b,#e8b04b); border: none; color: #2b2010; }
 
 </style>
 </head>
@@ -680,7 +701,7 @@ function buildPopup(p) {
 <div class="popup-footer">
   ${pdfUrl
     ? `<button class="pdf-link" style="cursor:pointer;border:none;width:100%"
-       onclick="openPdfPanel('${pdfUrl}','${wellName || p.pdf_stem}')">
+       onclick="openPdfPanel('${pdfUrl}','${wellName || p.pdf_stem}','${(p.pdf_stem||"").replace(/'/g,"")}')">
        📄 View Original Well Record PDF</button>`
     : '<div style="text-align:center;color:#6b7e99;font-size:11px;padding:6px">Original scan not yet available online</div>'}
   <div style="display:flex;gap:6px;margin-top:6px">
@@ -696,7 +717,7 @@ function buildPopup(p) {
               color:#90bce0;font-size:10px;cursor:pointer;">
       📋 Copy Coords
     </span>
-    <span onclick="toggleFixPanel('${(p.pdf_stem||"").replace(/'/g,"")}')"
+    <span onclick="openVerify('${(p.pdf_stem||"").replace(/'/g,"")}')"
        style="flex:1;text-align:center;padding:6px;background:rgba(245,158,11,.12);
               border:1px solid rgba(245,158,11,.3);border-radius:6px;
               color:#fcd34d;font-size:10px;cursor:pointer;">
@@ -1051,9 +1072,8 @@ async function loadData() {
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 
 // ─── PDF slide-out panel ─────────────────────────────────────────────────────
-function openPdfPanel(url, title) {
+function openPdfPanel(url, title, stem, expandFix) {
   const panel   = document.getElementById('pdf-panel');
-  const overlay = document.getElementById('pdf-panel-overlay');
   const iframe  = document.getElementById('pdf-panel-iframe');
   const noUrl   = document.getElementById('pdf-no-url');
   const titleEl = document.getElementById('pdf-panel-title');
@@ -1074,8 +1094,26 @@ function openPdfPanel(url, title) {
     extLink.style.display = 'none';
   }
 
+  // Prefill the panel's verify form so the document and the fields
+  // sit side by side — no more closing the PDF to type a correction.
+  PANEL_STEM = stem || "";
+  const fixWrap = document.getElementById('panel-fix');
+  if (PANEL_STEM && FIX_CURRENT[PANEL_STEM]) {
+    const rec = FIX_CURRENT[PANEL_STEM];
+    ["section","township","range","county","quadrant"].forEach(f => {
+      document.getElementById('pfix-' + f).value = (rec[f] || "").toString();
+    });
+    document.getElementById('pfix-lat').value = (rec.lat==null||rec.lat==="") ? "" : (+rec.lat).toFixed(6);
+    document.getElementById('pfix-lon').value = (rec.lon==null||rec.lon==="") ? "" : (+rec.lon).toFixed(6);
+    fixWrap.style.display = 'block';
+    document.getElementById('panel-fix-body').style.display = expandFix ? 'block' : 'none';
+  } else {
+    fixWrap.style.display = 'none';
+  }
+
+  // Panel is intentionally non-modal: the map, popup, and sidebar stay
+  // usable while the document is open.
   panel.classList.add('open');
-  overlay.classList.add('show');
 }
 
 function closePdfPanel() {
@@ -1094,6 +1132,59 @@ document.addEventListener('keydown', function(e) {
   if (e.key === 'Escape') closePdfPanel();
 });
 
+// ── Verify inside the PDF panel ──────────────────────────────────────────────
+let PANEL_STEM = "";
+
+// Popup "Verify / Fix": open the document with the form ready beside it;
+// fall back to the small in-popup form when there is no PDF online.
+function openVerify(stem) {
+  const rec = FIX_CURRENT[stem] || {};
+  const nameParts = (rec.pdf_stem || stem || "").split("_");
+  const wellName  = nameParts.length >= 2 ? nameParts.slice(1, -1).join(" ") : stem;
+  if (rec.s3_url) openPdfPanel(rec.s3_url, wellName, stem, true);
+  else toggleFixPanel(stem);
+}
+
+function togglePanelFix() {
+  const body = document.getElementById('panel-fix-body');
+  body.style.display = body.style.display === 'none' ? 'block' : 'none';
+}
+
+function submitPanelFix(allCorrect) {
+  const stem = PANEL_STEM;
+  const p = FIX_CURRENT[stem] || {};
+  const fields = ["section","township","range","county","quadrant"];
+  const lines = [];
+  let changed = false;
+  for (const f of fields) {
+    const inp = document.getElementById('pfix-' + f);
+    const newV = inp ? inp.value.trim() : "";
+    const oldV = (p[f] || "").toString().trim();
+    if (newV !== oldV) { changed = true; lines.push(`- ${f}: \`${oldV}\` -> \`${newV}\``); }
+    else { lines.push(`- ${f}: \`${oldV}\` (unchanged)`); }
+  }
+  let coordChanged = false;
+  const cur = {lat: (p.lat==null?"":(+p.lat).toFixed(6)),
+               lon: (p.lon==null?"":(+p.lon).toFixed(6))};
+  for (const f of ["lat","lon"]) {
+    const inp = document.getElementById('pfix-' + f);
+    const newV = inp ? inp.value.trim() : "";
+    if (newV !== "" && newV !== cur[f]) {
+      coordChanged = true; changed = true;
+      lines.push(`- ${f}: \`${cur[f]}\` -> \`${newV}\``);
+    }
+  }
+  const verdict = allCorrect ? "VERIFIED-CORRECT" : (changed ? "CORRECTION" : "VERIFIED-CORRECT");
+  const title = encodeURIComponent(`[${verdict}] ${stem}`);
+  const body  = encodeURIComponent(
+    `**Well:** \`${stem}\`\n**Verdict:** ${verdict}\n\n` + lines.join("\n") +
+    `\n\n**Current coords:** ${p.lat}, ${p.lon}\n**Record:** \`${stem}\`\n` +
+    (coordChanged ? `\n_Direct coordinate override — apply lat/lon as given, no re-resolution._\n` : "") +
+    `\n_Submitted from the map verify panel._`);
+  window.open(`https://github.com/${FIX_REPO}/issues/new?labels=correction&title=${title}&body=${body}`,
+              "_blank");
+}
+
 initMap();
 loadData();
 </script>
@@ -1109,7 +1200,29 @@ loadData();
   </div>
   <iframe id="pdf-panel-iframe" src="" frameborder="0" allowfullscreen></iframe>
   <div class="pdf-no-url" id="pdf-no-url" style="display:none">
-    PDF not yet uploaded to S3 for this record.
+    Original scan not yet available online for this record.
+  </div>
+  <div id="panel-fix" style="display:none">
+    <button id="panel-fix-toggle" onclick="togglePanelFix()">✏️ Verify / fix this record</button>
+    <div id="panel-fix-body" style="display:none">
+      <div class="pfix-note">
+        Compare each field with the document above. Correct anything that's wrong,
+        or confirm it all matches — either way the map learns from it.
+      </div>
+      <div class="pfix-grid">
+        <label>Section</label><input id="pfix-section">
+        <label>Township</label><input id="pfix-township">
+        <label>Range</label><input id="pfix-range">
+        <label>County</label><input id="pfix-county">
+        <label>Grid cell</label><input id="pfix-quadrant">
+        <label>Latitude</label><input id="pfix-lat" placeholder="only if printed on the record">
+        <label>Longitude</label><input id="pfix-lon" placeholder="only if printed on the record">
+      </div>
+      <div class="pfix-actions">
+        <button class="pfix-ok" onclick="submitPanelFix(true)">✓ Everything matches</button>
+        <button class="pfix-submit" onclick="submitPanelFix(false)">Submit correction</button>
+      </div>
+    </div>
   </div>
 </div>
 

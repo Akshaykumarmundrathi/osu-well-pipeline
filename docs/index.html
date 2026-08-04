@@ -86,24 +86,29 @@
   button.reset-btn:hover { background: rgba(255,255,255,.06); color: #eee; }
 
   /* Stats panel */
-  .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin-bottom: 6px; }
+  .stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; margin-bottom: 6px; }
   .stat-box {
     background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.08);
-    border-radius: 7px; padding: 8px 10px; text-align: center;
+    border-radius: 7px; padding: 8px 6px; text-align: center;
   }
-  .stat-box .val { font-size: 20px; font-weight: 800; color: #60a5fa; }
-  .stat-box .lbl { font-size: 9px; color: #666; margin-top: 2px; text-transform: uppercase; letter-spacing: .5px; }
+  .stat-box .val { font-size: 18px; font-weight: 800; color: #60a5fa; }
+  .stat-box .lbl { font-size: 8.5px; color: #666; margin-top: 2px; text-transform: uppercase; letter-spacing: .4px; }
 
-  /* Legend */
-  .legend-row {
-    display: flex; align-items: center; gap: 8px;
-    margin-bottom: 4px; font-size: 11px; cursor: pointer; padding: 3px 5px;
-    border-radius: 4px; transition: background .1s;
+  /* Collapsible "About" section */
+  #about-details summary { cursor: pointer; }
+  #about-details summary.section-label { border-bottom: none; margin-bottom: 2px; }
+  #about-details[open] summary.section-label { border-bottom: 1px solid rgba(74,144,217,.2); margin-bottom: 6px; }
+
+  /* Sidebar footer */
+  #sidebar-footer {
+    flex-shrink: 0; padding: 8px 12px 10px; border-top: 1px solid rgba(255,255,255,.08);
+    font-size: 9.5px; color: #666; text-align: center;
   }
-  .legend-row:hover { background: rgba(255,255,255,.05); }
-  .legend-dot { width: 11px; height: 11px; border-radius: 50%; flex-shrink: 0; border: 2px solid rgba(255,255,255,.35); }
-  .legend-row.hidden-decade .legend-dot { opacity: .25; }
-  .legend-row.hidden-decade span { color: #444; text-decoration: line-through; }
+  #sidebar-footer a { color: #4a90d9; text-decoration: none; }
+  #sidebar-footer a:hover { text-decoration: underline; }
+  #sidebar-footer .foot-links { margin: 3px 0 6px; }
+  #sidebar-footer .foot-links span { color: #444; margin: 0 4px; }
+  #sidebar-footer img { display: inline-block; margin-top: 2px; opacity: .85; height: 18px; }
 
   /* County list */
   .county-item {
@@ -305,9 +310,9 @@
   .stat-box { background: var(--bk-card); border: 1px solid var(--bk-earth-soft); }
   .stat-box .val { color: var(--bk-earth); }
   .stat-box .lbl { color: var(--bk-ink-soft); }
-  .legend-row:hover { background: rgba(87,128,62,.1); }
-  .legend-dot { border-color: rgba(0,0,0,.25); }
-  .legend-row.hidden-decade span { color: #b3a88e; }
+  #sidebar-footer { border-top-color: var(--bk-line); color: var(--bk-ink-soft); }
+  #sidebar-footer a { color: var(--bk-earth-dk); }
+  #sidebar-footer .foot-links span { color: #b3a88e; }
   .county-item { border-bottom-color: var(--bk-earth-soft); }
   .county-bar-wrap { background: rgba(87,128,62,.12); }
   .county-bar { background: linear-gradient(90deg, var(--bk-earth-dk), var(--bk-earth)); }
@@ -348,9 +353,6 @@
   .pdf-panel-close:hover { background: rgba(255,253,247,.3); }
   .pdf-no-url { color: var(--bk-ink-soft); }
   .gm-style-btn { background: var(--bk-card); color: var(--bk-ink); }
-  .legend-row.active-decade { background: rgba(87,128,62,.16); font-weight: 700; }
-  .legend-row.dimmed { opacity: .4; }
-  .legend-row.dimmed:hover { opacity: .8; }
   #pdf-panel { width: min(650px, 94vw); right: calc(-1 * min(650px, 94vw) - 12px); }
   #pdf-panel.open { right: 0; }
   #panel-fix { flex-shrink: 0; border-top: 3px solid var(--bk-earth); background: var(--bk-parch2); }
@@ -409,17 +411,18 @@
       <div class="stat-grid">
         <div class="stat-box"><div class="val" id="stat-total">—</div><div class="lbl">Wells Mapped</div></div>
         <div class="stat-box"><div class="val" id="stat-counties">—</div><div class="lbl">Counties</div></div>
-        <div class="stat-box"><div class="val" id="stat-year-min">—</div><div class="lbl">Earliest</div></div>
-        <div class="stat-box"><div class="val" id="stat-year-max">—</div><div class="lbl">Latest</div></div>
-        <div class="stat-box"><div class="val" id="stat-precise">—</div><div class="lbl">📍 Precise</div></div>
-        <div class="stat-box"><div class="val" id="stat-approx">—</div><div class="lbl">◎ Approx</div></div>
-        <div class="stat-box"><div class="val" id="stat-corrected">—</div><div class="lbl">🔧 Human-corrected</div></div>
+        <div class="stat-box"><div class="val" id="stat-years">—</div><div class="lbl">Years Covered</div></div>
+        <div class="stat-box"><div class="val" id="stat-precise-pct">—</div><div class="lbl">📍 Precise</div></div>
+        <div class="stat-box"><div class="val" id="stat-reviewed">—</div><div class="lbl">🔧 Human-reviewed</div></div>
       </div>
 
       <!-- Filters -->
       <div class="section-label">Find Wells</div>
       <input type="text" id="search-county" placeholder="🔍 Search by county...">
       <input type="text" id="search-wellname" placeholder="🔍 Search by well name or API #...">
+      <select id="filter-decade">
+        <option value="">All decades</option>
+      </select>
       <select id="filter-resolution">
         <option value="">Location precision: all</option>
         <option value="precise">📍 Precise pins only (~330 ft)</option>
@@ -436,29 +439,31 @@
       <button class="filter-btn" onclick="applyFilters()">Apply Filters</button>
       <button class="reset-btn" onclick="resetFilters()">↺ Reset All Filters</button>
 
-      <!-- Legend -->
-      <div class="section-label">Decades <span style="color:#5c5040;font-size:9px;font-weight:400">(click one to see only those wells; click again to clear)</span></div>
-      <div id="legend"></div>
-      <div style="margin-top:8px;font-size:9.5px;color:#5c5040;line-height:1.7">
-        <span style="font-weight:700;color:#3c5c2a">📍 Teardrop</span> = precise location (within ~330 ft)<br>
-        <span style="font-weight:700;color:#3c5c2a">◎ Open ring</span> = approximate (within ±½ mile)
-      </div>
+      <!-- About (collapsed by default to keep the panel short) -->
+      <details id="about-details">
+        <summary class="section-label">About This Map</summary>
+        <div style="font-size:10px;color:#5c5040;line-height:1.6">
+          Each pin was read automatically from the original scanned well record and checked
+          against Oklahoma's land-survey grid.
+          <strong style="color:#3c5c2a">📍 Precise</strong> = located within about 330 feet (teardrop pin).
+          <strong style="color:#3c5c2a">◎ Approx</strong> = somewhere within its square-mile section (open ring).
+          Open any pin to view the original document — and if something looks wrong, use
+          ✏️ Verify / Fix; the map repairs itself from submissions.
+        </div>
+      </details>
 
-      <!-- Data info -->
-      <div class="section-label">About This Map</div>
-      <div style="font-size:10px;color:#5c5040;line-height:1.6">
-        Each pin was read automatically from the original scanned well record and checked
-        against Oklahoma's land-survey grid.
-        <strong style="color:#3c5c2a">📍 Precise</strong> = located within about 330 feet.
-        <strong style="color:#3c5c2a">◎ Approx</strong> = somewhere within its square-mile section.
-        Open any pin to view the original document — and if something looks wrong, use
-        ✏️ Verify / Fix; the map repairs itself from submissions.
-        <br><br>
-        <strong style="color:#3c5c2a">Updated:</strong> <span id="data-updated">—</span>
-        <br>
-        <strong style="color:#3c5c2a">Source:</strong> Oklahoma State University well-records project
-      </div>
+    </div>
 
+    <!-- Footer -->
+    <div id="sidebar-footer">
+      <div>Updated <span id="data-updated">—</span></div>
+      <div class="foot-links">
+        <a href="https://github.com/Akshaykumarmundrathi/osu-well-pipeline" target="_blank" rel="noopener">GitHub</a>
+        <span>·</span>
+        <a href="https://akshaykumarmundrathi.github.io/Portfolio/well-case-study.html" target="_blank" rel="noopener">Case Study</a>
+        <span>·</span>OSU Well Records Project
+      </div>
+      <img src="https://hits.sh/akshaykumarmundrathi.github.io/osu-well-pipeline.svg?style=flat-square&label=site%20views&color=57803e" alt="Site view counter" loading="lazy">
     </div>
   </div>
 
@@ -643,6 +648,20 @@ function friendlyResolution(r) {
   return "Automated reading";
 }
 
+// Reconstruct the original-record PDF URL client-side from fields already on
+// the feature (collection/year/month/pdf_stem) instead of storing a full S3
+// URL on all 51k+ features — same data, ~4.6MB smaller file, and the bucket
+// hostname appears once in the page source instead of repeated everywhere.
+const S3_BUCKET = "osu-well-records-225989338968";
+const S3_REGION = "us-east-1";
+function buildPdfUrl(p) {
+  const colNum = String(p.collection || "").match(/\d+/);
+  if (!colNum || !p.year || !p.month || !p.pdf_stem) return "";
+  const key = `pdfs/ExportedFolderContents_${colNum[0]}/${p.year}/${p.month}/${p.pdf_stem}.pdf`;
+  const encoded = key.split("/").map(encodeURIComponent).join("/");
+  return `https://${S3_BUCKET}.s3.${S3_REGION}.amazonaws.com/${encoded}`;
+}
+
 function buildPopup(p) {
   const nameParts = (p.pdf_stem || "").split("_");
   const wellName  = nameParts.length >= 2 ? nameParts.slice(1, -1).join(" ") : p.pdf_stem;
@@ -662,7 +681,7 @@ function buildPopup(p) {
     fmtDir(p.range, "R")
   ].filter(Boolean).join(", ");
 
-  const pdfUrl = p.s3_url || "";
+  const pdfUrl = buildPdfUrl(p);
 
   const googleMapsLink = `https://www.google.com/maps/search/?api=1&query=${p.lat},${p.lon}`;
 
@@ -933,40 +952,29 @@ function updateStats(features) {
   const years    = features.map(f => +f.properties.year).filter(y => y > 1800 && y < 2100);
   const counties = new Set(features.map(f => f.properties.county).filter(Boolean));
   const precise  = features.filter(f => !(f.properties.resolution||"").includes("centroid")).length;
-  const approx   = features.length - precise;
-  const corrected = features.filter(f => f.properties.corrected).length;
+  const reviewed = features.filter(f => f.properties.verified || f.properties.corrected).length;
   document.getElementById("stat-total").textContent    = features.length.toLocaleString();
   document.getElementById("stat-counties").textContent = counties.size;
-  document.getElementById("stat-year-min").textContent = years.length ? Math.min(...years) : "—";
-  document.getElementById("stat-year-max").textContent = years.length ? Math.max(...years) : "—";
-  document.getElementById("stat-precise").textContent  = precise.toLocaleString();
-  document.getElementById("stat-approx").textContent   = approx.toLocaleString();
-  document.getElementById("stat-corrected").textContent = corrected.toLocaleString();
+  document.getElementById("stat-years").textContent    = years.length ? `${Math.min(...years)}–${Math.max(...years)}` : "—";
+  document.getElementById("stat-precise-pct").textContent = features.length ? `${Math.round(precise / features.length * 100)}%` : "—";
+  document.getElementById("stat-reviewed").textContent = reviewed.toLocaleString();
   document.getElementById("well-count-badge").textContent = `${features.length.toLocaleString()} Wells`;
 }
 
 function buildLegend() {
-  const el = document.getElementById("legend");
-  el.innerHTML = "";
-  Object.entries(DECADE_COLORS).forEach(([decade, color]) => {
-    const row = document.createElement("div");
-    row.className    = "legend-row";
-    row.dataset.decade = decade;
-    row.innerHTML    = `<div class="legend-dot" style="background:${color}"></div><span>${decade}</span>`;
-    row.addEventListener("click", () => toggleDecade(decade, row));
-    el.appendChild(row);
+  const el = document.getElementById("filter-decade");
+  el.innerHTML = '<option value="">All decades</option>';
+  Object.keys(DECADE_COLORS).forEach(decade => {
+    const opt = document.createElement("option");
+    opt.value = decade;
+    opt.textContent = decade;
+    el.appendChild(opt);
   });
-}
-
-function toggleDecade(decade, row) {
-  if (selectedDecades.has(decade)) selectedDecades.delete(decade);
-  else selectedDecades.add(decade);
-  document.querySelectorAll(".legend-row").forEach(r => {
-    const on = selectedDecades.has(r.dataset.decade);
-    r.classList.toggle("active-decade", on);
-    r.classList.toggle("dimmed", selectedDecades.size > 0 && !on);
+  el.addEventListener("change", () => {
+    selectedDecades.clear();
+    if (el.value) selectedDecades.add(el.value);
+    applyFilters();
   });
-  applyFilters();
 }
 
 // ─── Filtering ────────────────────────────────────────────────────────────────
@@ -1000,10 +1008,9 @@ function applyFilters() {
 
 function resetFilters() {
   ["search-county","search-wellname","quick-search"].forEach(id => document.getElementById(id).value = "");
-  ["filter-resolution","filter-flags"].forEach(id => document.getElementById(id).value = "");
+  ["filter-decade","filter-resolution","filter-flags"].forEach(id => document.getElementById(id).value = "");
   selectedDecades.clear();
   quickSearchVal = "";
-  document.querySelectorAll(".legend-row").forEach(r => r.classList.remove("active-decade", "dimmed"));
   applyFilters();
 }
 
@@ -1153,7 +1160,8 @@ function openVerify(stem) {
   const rec = FIX_CURRENT[stem] || {};
   const nameParts = (rec.pdf_stem || stem || "").split("_");
   const wellName  = nameParts.length >= 2 ? nameParts.slice(1, -1).join(" ") : stem;
-  if (rec.s3_url) openPdfPanel(rec.s3_url, wellName, stem, true);
+  const recPdfUrl = buildPdfUrl(rec);
+  if (recPdfUrl) openPdfPanel(recPdfUrl, wellName, stem, true);
   else toggleFixPanel(stem);
 }
 

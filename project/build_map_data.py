@@ -320,8 +320,12 @@ def _build_feature(row: dict, dot_lat: float, dot_lon: float) -> dict:
         "cell_bl_lon":        _safe_float(row.get("cell_bl_lon")),
         "cell_br_lat":        _safe_float(row.get("cell_br_lat")),
         "cell_br_lon":        _safe_float(row.get("cell_br_lon")),
-        # S3 URL — direct link to the original well-record PDF
-        "s3_url":             _s3_pdf_url(collection_raw, year, month, stem),
+        # NOTE: the PDF's S3 URL is intentionally NOT stored per-feature.
+        # docs/index.html reconstructs it client-side (buildPdfUrl()) from
+        # collection/year/month/pdf_stem, which are already present below —
+        # storing the full URL on all 51k+ features repeated the AWS account
+        # ID that many times in a public file for no benefit (~4.6MB of pure
+        # redundancy). _s3_pdf_url() is kept for other callers/scripts.
         # Flags
         "flags":              _str(row.get("flags")),
     }

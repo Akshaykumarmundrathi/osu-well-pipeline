@@ -30,7 +30,7 @@ from pathlib import Path
 import boto3
 
 REGION       = "us-east-1"
-ACCOUNT2_ID  = "266087050585"
+ACCOUNT2_ID  = os.environ["ACCOUNT2_ID"]
 ECR_REPO     = "osu-well-pipeline"
 ECR_REGISTRY = f"{ACCOUNT2_ID}.dkr.ecr.{REGION}.amazonaws.com"
 ECR_URI      = f"{ECR_REGISTRY}/{ECR_REPO}"

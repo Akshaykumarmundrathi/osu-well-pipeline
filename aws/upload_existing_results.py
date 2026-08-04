@@ -31,7 +31,7 @@ from pathlib import Path
 import boto3
 from botocore.exceptions import ClientError
 
-BUCKET      = "osu-well-records-225989338968"
+BUCKET      = os.environ.get("S3_BUCKET") or os.environ["INPUT_BUCKET"]
 KEY_PREFIX  = "outputs/merged"
 ACCOUNT_1_PROFILE = os.environ.get("AWS_PROFILE_ACCOUNT1", "akshay")  # aws profile for account 1
 
@@ -86,7 +86,7 @@ def main():
         print(f"Bucket access OK: s3://{BUCKET}")
     except ClientError as e:
         print(f"Cannot access s3://{BUCKET}: {e}")
-        print("Make sure AWS credentials for Account 1 (225989338968) are configured.")
+        print("Make sure AWS credentials for Account 1 are configured.")
         print(f"  Set AWS_PROFILE_ACCOUNT1 env var to your Account 1 profile name.")
         sys.exit(1)
 

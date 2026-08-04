@@ -31,10 +31,10 @@ from pathlib import Path
 import boto3
 from botocore.exceptions import ClientError
 
-ACCOUNT1_ID   = "225989338968"
-ACCOUNT2_ID   = "266087050585"
+ACCOUNT1_ID   = os.environ["ACCOUNT1_ID"]
+ACCOUNT2_ID   = os.environ["ACCOUNT2_ID"]
 REGION        = "us-east-1"
-BUCKET        = f"osu-well-records-{ACCOUNT1_ID}"
+BUCKET        = os.environ.get("S3_BUCKET") or f"osu-well-records-{ACCOUNT1_ID}"
 PDF_PREFIX    = "pdfs/"
 OUT_PREFIX    = "outputs"
 INDEX_S3_KEY  = f"{OUT_PREFIX}/merged/dataset_index_s3.csv"

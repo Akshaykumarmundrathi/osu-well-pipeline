@@ -44,7 +44,7 @@ from botocore.exceptions import ClientError
 # ── Configuration from env ──────────────────────────────────────────────────
 SLICE_INDEX    = int(os.environ.get("BATCH_SLICE_INDEX",  "0"))
 TOTAL_SLICES   = int(os.environ.get("BATCH_TOTAL_SLICES", "1"))
-S3_BUCKET      = os.environ.get("S3_BUCKET",           "osu-well-records-225989338968")
+S3_BUCKET      = os.environ["S3_BUCKET"]
 S3_INDEX_KEY   = os.environ.get("S3_INDEX_KEY",        "outputs/merged/dataset_index_s3.csv")
 S3_OUT_PREFIX  = os.environ.get("S3_OUTPUT_PREFIX",    f"outputs/slices/{SLICE_INDEX:04d}")
 S3_CKPT_KEY    = os.environ.get("S3_CHECKPOINT_KEY",   f"checkpoints/{SLICE_INDEX:04d}/processing_status.csv")

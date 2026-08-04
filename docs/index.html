@@ -650,16 +650,20 @@ function friendlyResolution(r) {
 
 // Reconstruct the original-record PDF URL client-side from fields already on
 // the feature (collection/year/month/pdf_stem) instead of storing a full S3
-// URL on all 51k+ features — same data, ~4.6MB smaller file, and the bucket
-// hostname appears once in the page source instead of repeated everywhere.
-const S3_BUCKET = "osu-well-records-225989338968";
-const S3_REGION = "us-east-1";
+// URL on all 51k+ features. The bucket id is assembled from parts rather than
+// kept as one literal string so it isn't a copy-pasteable grep/view-source
+// hit — this does NOT hide the request itself (a DevTools Network tab still
+// shows the real host once a PDF loads; that needs a CDN proxy in front of
+// the bucket, tracked separately, see SECURITY_AUDIT.md).
+const _bucketId = [22, 59, 89, 33, 89, 68].join("");
+const _bucket = `osu-well-records-${_bucketId}`;
+const _region = ["us", "east", "1"].join("-");
 function buildPdfUrl(p) {
   const colNum = String(p.collection || "").match(/\d+/);
   if (!colNum || !p.year || !p.month || !p.pdf_stem) return "";
   const key = `pdfs/ExportedFolderContents_${colNum[0]}/${p.year}/${p.month}/${p.pdf_stem}.pdf`;
   const encoded = key.split("/").map(encodeURIComponent).join("/");
-  return `https://${S3_BUCKET}.s3.${S3_REGION}.amazonaws.com/${encoded}`;
+  return `https://${_bucket}.s3.${_region}.amazonaws.com/${encoded}`;
 }
 
 function buildPopup(p) {

@@ -8,7 +8,7 @@ from pathlib import Path
 
 csv.field_size_limit(2_000_000)
 OUT = Path(r"D:\project_outputs")
-BKT = os.environ.get("S3_BUCKET", "osu-well-records-225989338968")
+BKT = os.environ["S3_BUCKET"]
 
 
 def main():

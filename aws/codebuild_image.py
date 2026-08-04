@@ -11,11 +11,11 @@ from pathlib import Path
 import boto3
 
 REGION = "us-east-1"
-ACCOUNT = "225989338968"
+ACCOUNT = os.environ["ACCOUNT1_ID"]
 ECR_REPO = "osu-pipeline"
 ECR_REGISTRY = f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com"
 ECR_URI = f"{ECR_REGISTRY}/{ECR_REPO}"
-BUCKET = "osu-well-records-225989338968"
+BUCKET = os.environ.get("S3_BUCKET") or os.environ["INPUT_BUCKET"]
 SRC_KEY = "codebuild/source.zip"
 ROLE = "osu-codebuild-role"
 PROJECT = "osu-pipeline-build"

@@ -4,7 +4,7 @@ setup_aws.py  —  Idempotent AWS resource setup for Account 2 (compute)
 Creates / verifies all AWS resources needed to run the pipeline on Batch.
 Safe to re-run — all operations check before creating.
 
-Requires AWS credentials for Account 2 (266087050585 — mano).
+Requires AWS credentials for Account 2 (mano — compute).
 Configure via:
     aws configure --profile mano
     export AWS_PROFILE=mano
@@ -29,10 +29,10 @@ import boto3
 from botocore.exceptions import ClientError
 
 # ── Config ───────────────────────────────────────────────────────────────────
-ACCOUNT1_ID    = "225989338968"   # Akshay — data (S3 + RDS)
-ACCOUNT2_ID    = "266087050585"   # mano   — compute ($100 credits)
+ACCOUNT1_ID    = os.environ["ACCOUNT1_ID"]   # Akshay — data (S3 + RDS)
+ACCOUNT2_ID    = os.environ["ACCOUNT2_ID"]   # mano   — compute ($100 credits)
 REGION         = "us-east-1"
-BUCKET         = f"osu-well-records-{ACCOUNT1_ID}"
+BUCKET         = os.environ.get("S3_BUCKET") or f"osu-well-records-{ACCOUNT1_ID}"
 
 ECR_REPO       = "osu-well-pipeline"
 BATCH_CE_NAME  = "osu-pipeline-ce"

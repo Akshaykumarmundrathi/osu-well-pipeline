@@ -129,7 +129,7 @@ def main():
         try:
             import boto3, re
             cli = boto3.client("s3")
-            bkt = os.environ.get("S3_BUCKET", "osu-well-records-225989338968")
+            bkt = os.environ["S3_BUCKET"]
             sample = random.Random(1).sample(out_rows, min(a.check_s3, len(out_rows)))
             miss = 0
             for r in sample:

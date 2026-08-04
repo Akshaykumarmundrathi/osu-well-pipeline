@@ -29,11 +29,15 @@ Principle followed: apply only changes that cannot break the live map / Action;
   maintainer). Legitimate owner/maintainer corrections work unchanged.
 
 ## Flagged — needs your approval (AWS changes; not done autonomously to avoid breaking the site)
-1. **Account ID in the public bucket name** (`osu-well-records-225989338968`).
+1. **Account ID embedded in the public bucket name** (`osu-well-records-<account-id>`).
    Inherent to direct-from-S3 loading. To remove it from public view, front the
    bucket with **CloudFront + Origin Access Control**, turn ON S3 "Block Public
    Access", and serve PDFs via a neutral domain. This both masks the account ID
    and removes all direct public bucket access. (Site keeps working via the CDN.)
+   **This is the only way to fully stop a browser's Network tab from ever
+   showing the real S3 host** — everything in the "Fixed" section below reduces
+   *readable-source* exposure but a request to fetch a PDF still ultimately hits
+   S3 directly until this is in place.
 2. **PDFs are world-readable.** Fine if these are public records; if not, the
    same CloudFront+OAC setup (signed URLs) restricts access.
 3. **Rotate the GitHub PAT** that was shared earlier in chat — regenerate it in
@@ -42,7 +46,27 @@ Principle followed: apply only changes that cannot break the live map / Action;
 4. **Optional:** set repo secret `ALLOWED_CORRECTORS` if specific non-collaborator
    people should be allowed to submit applied corrections.
 
+## Fixed (2026-08-04 pass) — no AWS infra changes, no functional break
+- **GitHub secret scanning + push protection** enabled on the repo (was off).
+- **`s3_url` removed from all 51,559 map features** in `well_locations.json`;
+  the PDF link is now built client-side from fields already on the feature.
+  Cuts ~9MB of pure repetition of the account-ID-bearing hostname.
+- **The one remaining bucket-id string in `docs/index.html`** is assembled
+  from split parts at runtime instead of kept as one literal, so it's not a
+  copy-pasteable `grep`/view-source hit. (Cosmetic — see item 1's caveat above;
+  a DevTools Network tab still reveals the real host once a PDF actually loads.)
+- **Dead code removed** from `project/build_map_data.py` — the old
+  `_s3_pdf_url()`/`_collection_num()` helpers and their hardcoded bucket
+  default were unused (URL building moved client-side) and were just sitting
+  in the public repo restating the account ID.
+- **`.env.example` and AWS ops scripts** (`aws/*.py`) — hardcoded real bucket
+  names / account IDs replaced with placeholders or required env vars (no
+  baked-in default), so cloning the repo no longer hands you the real values.
+
 ## Net
 Public exposure now: the map JSON, the PDFs (prefix-scoped, no listing), and
 read-only code. Corrections require authorization. No credentials anywhere
-public. Remaining items (1-3) are AWS/account actions for you to approve.
+public. The account ID no longer appears as a literal, grep-able string
+anywhere in the tracked repo or rendered page source. Item 1 (CloudFront+OAC)
+is still the only way to stop the *live network request* from revealing the
+real S3 host, and remains an AWS/account action for you to approve.

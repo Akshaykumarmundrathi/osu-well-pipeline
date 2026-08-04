@@ -7,7 +7,7 @@ produce well_locations.json, then commits and pushes to GitHub Pages
 using a Personal Access Token from Secrets Manager.
 
 Environment variables (set by orchestrate.py job submission):
-  S3_BUCKET           source+output bucket  (osu-well-records-225989338968)
+  S3_BUCKET           source+output bucket
   S3_INPUT_KEY        key of dot_coordinates.csv  (outputs/merged/dot_coordinates.csv)
   SECRETS_PREFIX      Secrets Manager prefix  (osu/)
   AWS_DEFAULT_REGION  us-east-1
@@ -33,7 +33,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 # ── Configuration ────────────────────────────────────────────────────────────
-S3_BUCKET   = os.environ.get("S3_BUCKET",          "osu-well-records-225989338968")
+S3_BUCKET   = os.environ["S3_BUCKET"]
 S3_IN_KEY   = os.environ.get("S3_INPUT_KEY",       "outputs/merged/dot_coordinates.csv")
 SECRETS_PFX = os.environ.get("SECRETS_PREFIX",     "osu/")
 REGION      = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")

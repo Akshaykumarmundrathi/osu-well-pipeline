@@ -42,7 +42,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 # ── Config ────────────────────────────────────────────────────────────────────
-BUCKET    = "osu-well-records-225989338968"
+BUCKET    = os.environ.get("S3_BUCKET") or os.environ["INPUT_BUCKET"]
 PDF_PFX   = "pdfs/"
 REGION    = "us-east-1"
 PROFILE   = os.environ.get("AWS_PROFILE_ACCOUNT1", "default")

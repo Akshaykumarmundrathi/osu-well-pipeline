@@ -38,7 +38,6 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import quote as _urlquote
 
 # ── Defaults ───────────────────────────────────────────────────────────────────
 _DEFAULT_OUTPUT = Path(os.environ.get(
@@ -64,13 +63,6 @@ _RESOLVED_SOURCES = {
     "county_stripped",
     "section_adjacent",         # section ±1 (least precise)
 }
-
-# ── S3 configuration ────────────────────────────────────────────────────────────
-# PDFs are uploaded to: s3://osu-well-records-225989338968/pdfs/
-#   ExportedFolderContents_{N}/{year}/{month}/{stem}.pdf
-_S3_BUCKET = os.environ.get("S3_BUCKET", "osu-well-records-225989338968")
-_S3_REGION = os.environ.get("S3_REGION", "us-east-1")
-
 
 # ── Stem → (collection, year, month) backfill index ─────────────────────────────
 # Some coordinate sources (C2 redo/regen shards, county-pinned re-resolutions)
@@ -102,36 +94,6 @@ def _load_stem_meta(output_root: Path) -> dict:
             print(f"  WARNING: stem-meta load failed for {path.name}: {exc}")
     print(f"  Stem-meta backfill index: {len(_STEM_META):,} stems")
     return _STEM_META
-
-
-# ── S3 URL helpers ──────────────────────────────────────────────────────────────
-
-def _collection_num(raw: str) -> str:
-    """Extract the numeric part from 'ExportedFolderContents (1)' or '(1)' or '1' → '1'."""
-    m = re.search(r"\d+", raw or "")
-    return m.group(0) if m else ""
-
-
-def _s3_pdf_url(collection_raw: str, year: str, month: str, pdf_stem: str) -> str:
-    """
-    Construct the S3 HTTPS URL for a well-record PDF.
-
-    S3 key pattern:
-      pdfs/ExportedFolderContents_{N}/{year}/{month}/{stem}.pdf
-
-    Example:
-      pdfs/ExportedFolderContents_1/1911/03 - March/01911042_LEDBETTER & TERRELL 57_911294.pdf
-      →  https://osu-well-records-225989338968.s3.us-east-1.amazonaws.com/pdfs/...
-
-    Spaces, ampersands, etc. are percent-encoded; forward slashes are preserved.
-    Returns '' if any required component is missing.
-    """
-    col_num = _collection_num(collection_raw)
-    if not all([col_num, year, month, pdf_stem]):
-        return ""
-    key = f"pdfs/ExportedFolderContents_{col_num}/{year}/{month}/{pdf_stem}.pdf"
-    encoded = _urlquote(key, safe="/")
-    return f"https://{_S3_BUCKET}.s3.{_S3_REGION}.amazonaws.com/{encoded}"
 
 
 # ── Geometry helpers ────────────────────────────────────────────────────────────
@@ -557,18 +519,6 @@ def patch_index_html(index_html: Path) -> bool:
             1,
         )
         print("  Injected DATA_URL.")
-
-    # ── 3. Fix S3 URL construction in buildPopup() ───────────────────────────
-    old_pdf_s3 = (
-        '  const pdfS3   = p.pdf_path || "";\n'
-        '  const pdfUrl  = pdfS3\n'
-        '    ? `https://osu-well-records-225989338968.s3.amazonaws.com/${pdfS3.replace(/^s3:\\/\\/[^/]+\\//, "")}`\n'
-        '    : "#";\n'
-    )
-    new_pdf_s3 = '  const pdfUrl = p.s3_url || "";\n'
-    if old_pdf_s3 in content:
-        content = content.replace(old_pdf_s3, new_pdf_s3, 1)
-        print("  Fixed S3 URL construction (pdfS3 -> p.s3_url).")
 
     # ── 3b. Fix orphan ${pdfS3} reference (remove stale var after patch) ─────
     if '${pdfS3}' in content:

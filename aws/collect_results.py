@@ -28,8 +28,8 @@ from pathlib import Path
 import boto3
 
 REGION    = "us-east-1"
-ACCOUNT1  = "225989338968"
-BUCKET    = f"osu-well-records-{ACCOUNT1}"
+ACCOUNT1  = os.environ["ACCOUNT1_ID"]
+BUCKET    = os.environ.get("S3_BUCKET") or f"osu-well-records-{ACCOUNT1}"
 
 _DEFAULT_OUTPUT = Path(os.environ.get(
     "OUTPUT_ROOT",

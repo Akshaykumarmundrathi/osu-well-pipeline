@@ -7,7 +7,7 @@ run_coord_enrichment.py against RDS, and uploads the final
 dot_coordinates.csv back to S3.
 
 Environment variables (set by orchestrate.py job submission):
-  S3_BUCKET           source+output bucket  (osu-well-records-225989338968)
+  S3_BUCKET           source+output bucket
   S3_OUTPUT_PREFIX    prefix for merged outputs  (outputs/merged)
   SECRETS_PREFIX      Secrets Manager prefix  (osu/)
   AWS_DEFAULT_REGION  us-east-1
@@ -33,7 +33,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 # ── Configuration ────────────────────────────────────────────────────────────
-S3_BUCKET     = os.environ.get("S3_BUCKET",          "osu-well-records-225989338968")
+S3_BUCKET     = os.environ["S3_BUCKET"]
 S3_OUT_PREFIX = os.environ.get("S3_OUTPUT_PREFIX",   "outputs/merged")
 SECRETS_PFX   = os.environ.get("SECRETS_PREFIX",     "osu/")
 REGION        = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")

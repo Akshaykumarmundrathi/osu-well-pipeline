@@ -1,8 +1,8 @@
 # AWS Cloud-Run Design — Finish the Corpus on Fargate
 
 Goal: process the remaining **~520,000 unmapped records** in **hours** on AWS
-Fargate, instead of weeks on the 7.4 GB laptop. Same account (225989338968) as
-S3 + RDS → no cross-account friction.
+Fargate, instead of weeks on the 7.4 GB laptop. Same account as S3 + RDS →
+no cross-account friction.
 
 ## 1. What's already deployed (verified Jun-16)
 | Component | State |

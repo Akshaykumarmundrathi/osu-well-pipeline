@@ -413,6 +413,7 @@
         <div class="stat-box"><div class="val" id="stat-year-max">—</div><div class="lbl">Latest</div></div>
         <div class="stat-box"><div class="val" id="stat-precise">—</div><div class="lbl">📍 Precise</div></div>
         <div class="stat-box"><div class="val" id="stat-approx">—</div><div class="lbl">◎ Approx</div></div>
+        <div class="stat-box"><div class="val" id="stat-corrected">—</div><div class="lbl">🔧 Human-corrected</div></div>
       </div>
 
       <!-- Filters -->
@@ -429,6 +430,8 @@
         <option value="clean">Hide wells with warnings</option>
         <option value="flagged">Only wells with warnings</option>
         <option value="verified">Only human-verified ✅</option>
+        <option value="corrected">Only human-corrected 🔧</option>
+        <option value="human-touched">Only human-reviewed (verified or corrected)</option>
       </select>
       <button class="filter-btn" onclick="applyFilters()">Apply Filters</button>
       <button class="reset-btn" onclick="resetFilters()">↺ Reset All Filters</button>
@@ -697,6 +700,7 @@ function buildPopup(p) {
   <div class="popup-row"><span class="lbl">Reading confidence</span><span class="val ${confClass(p.confidence)}">${p.confidence}%</span></div>
   ${p.flags ? `<div class="popup-row"><span class="lbl">Flags</span><span class="val warn">${p.flags}</span></div>` : ""}
   ${p.verified ? `<div class="popup-row"><span class="lbl">Verified</span><span class="val" style="color:#27ae60;font-weight:700">✅ Human-verified</span></div>` : ""}
+  ${p.corrected ? `<div class="popup-row"><span class="lbl">Corrected</span><span class="val" style="color:#2563eb;font-weight:700">🔧 Human-corrected</span></div>` : ""}
 </div>
 <div class="popup-footer">
   ${pdfUrl
@@ -930,12 +934,14 @@ function updateStats(features) {
   const counties = new Set(features.map(f => f.properties.county).filter(Boolean));
   const precise  = features.filter(f => !(f.properties.resolution||"").includes("centroid")).length;
   const approx   = features.length - precise;
+  const corrected = features.filter(f => f.properties.corrected).length;
   document.getElementById("stat-total").textContent    = features.length.toLocaleString();
   document.getElementById("stat-counties").textContent = counties.size;
   document.getElementById("stat-year-min").textContent = years.length ? Math.min(...years) : "—";
   document.getElementById("stat-year-max").textContent = years.length ? Math.max(...years) : "—";
   document.getElementById("stat-precise").textContent  = precise.toLocaleString();
   document.getElementById("stat-approx").textContent   = approx.toLocaleString();
+  document.getElementById("stat-corrected").textContent = corrected.toLocaleString();
   document.getElementById("well-count-badge").textContent = `${features.length.toLocaleString()} Wells`;
 }
 
@@ -981,6 +987,8 @@ function applyFilters() {
     if (flagSel === "clean"    && p.flags)                                                   return false;
     if (flagSel === "flagged"  && !p.flags)                                                  return false;
     if (flagSel === "verified" && !p.verified)                                               return false;
+    if (flagSel === "corrected" && !p.corrected)                                              return false;
+    if (flagSel === "human-touched" && !p.verified && !p.corrected)                           return false;
     if (well   && ![(p.well_name||""),(p.pdf_stem||"")].some(s=>s.toLowerCase().includes(well))) return false;
     if (qs     && ![(p.well_name||""),(p.county||""),(p.pdf_stem||"")].some(s=>s.toLowerCase().includes(qs))) return false;
     return true;

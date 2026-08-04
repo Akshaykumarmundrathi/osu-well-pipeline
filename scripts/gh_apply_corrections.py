@@ -187,6 +187,7 @@ def main() -> None:
                     feat["geometry"]["coordinates"] = [round(lon, 7), round(lat, 7)]
                     p["lat"], p["lon"] = round(lat, 7), round(lon, 7)
                     p["resolution"] = "human_latlong"
+                    any_field_changed = True
                     note = "coordinates set from direct lat/lon override (human_latlong)"
                 else:
                     note = "lat/lon override incomplete — ignored"
@@ -214,6 +215,15 @@ def main() -> None:
                         "you submitted (likely already fixed by an earlier "
                         "correction, or the map view was showing stale/cached "
                         "data when you submitted)")
+
+            # Mark the well as human-corrected whenever this issue actually
+            # changed something (field or coordinate) — distinct from
+            # `verified`, which means "a human confirmed it was already
+            # correct" rather than "a human changed it". Lets the map filter
+            # for "show only wells a human has fixed". Never set on the
+            # true no-op path above.
+            if any_field_changed:
+                p["corrected"] = "human"
         else:
             p = feat["properties"]
             p["verified"] = "human"

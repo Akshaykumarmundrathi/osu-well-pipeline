@@ -1029,7 +1029,11 @@ async function loadData() {
       geojson = INLINE_GEOJSON;
     } else {
       detail.textContent = "Loading well location data...";
-      const resp = await fetch(DATA_URL);
+      // Cache-bust: without this, GitHub Pages' CDN / the browser can keep
+      // serving a stale well_locations.json for a while after a correction
+      // is pushed, making a just-applied fix look like it didn't take (and
+      // inviting a duplicate resubmission of the same correction).
+      const resp = await fetch(`${DATA_URL}?v=${Date.now()}`);
       if (!resp.ok) throw new Error(`HTTP ${resp.status} — ${resp.statusText}`);
       detail.textContent = "Parsing well location data...";
       geojson = await resp.json();

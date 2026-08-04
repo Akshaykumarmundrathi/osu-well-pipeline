@@ -160,6 +160,7 @@ def main() -> None:
         elif not verified:
             p = feat["properties"]
             str_changed = False
+            any_field_changed = False
             for f, newv in changes.items():
                 prop = FIELD_TO_PROP[f]
                 old = str(p.get(prop, ""))
@@ -167,6 +168,7 @@ def main() -> None:
                     log_rows.append({"stem": stem, "field": prop, "old": old,
                                      "new": newv, "issue": issue["number"]})
                     p[prop] = newv
+                    any_field_changed = True
                     if f != "county":
                         str_changed = True
             # Direct coordinate override wins over PLSS re-resolution: the user
@@ -201,8 +203,17 @@ def main() -> None:
                 else:
                     p["resolution"] = (p.get("resolution") or "") + "+needs-coord-rerun"
                     note = "fields updated; coordinates flagged for re-run"
-            else:
+            elif any_field_changed:
                 note = "fields updated"
+            else:
+                # Nothing actually differed from what's already live — e.g. a
+                # duplicate/resubmitted correction after an earlier issue
+                # already applied the same fix. Say so explicitly instead of
+                # the misleading generic "fields updated".
+                note = ("no changes applied — this data already matches what "
+                        "you submitted (likely already fixed by an earlier "
+                        "correction, or the map view was showing stale/cached "
+                        "data when you submitted)")
         else:
             p = feat["properties"]
             p["verified"] = "human"

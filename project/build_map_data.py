@@ -202,19 +202,6 @@ def _build_feature(row: dict, dot_lat: float, dot_lon: float) -> dict:
     def _str(v):
         return str(v).strip() if v not in (None, "", "None") else ""
 
-    # Cell-centre lat/lon: average of NW and SE corners (for reference layer)
-    cc_lat = cc_lon = None
-    try:
-        tl_lat = _safe_float(row.get("cell_tl_lat"))
-        tl_lon = _safe_float(row.get("cell_tl_lon"))
-        br_lat = _safe_float(row.get("cell_br_lat"))
-        br_lon = _safe_float(row.get("cell_br_lon"))
-        if None not in (tl_lat, tl_lon, br_lat, br_lon):
-            cc_lat = round((tl_lat + br_lat) / 2, 7)
-            cc_lon = round((tl_lon + br_lon) / 2, 7)
-    except Exception:
-        pass
-
     stem            = _str(row.get("pdf_stem"))
     year            = _str(row.get("year"))
     month           = _str(row.get("month"))
@@ -238,38 +225,25 @@ def _build_feature(row: dict, dot_lat: float, dot_lon: float) -> dict:
         "year":               year,
         "month":              month,
         "decade":             _str(row.get("decade")) or _decade_label(year),
-        "model_tier":         _str(row.get("model_tier")),
         # Location
         "county":             _clean_county(row.get("county_name")),
         "section":            _str(row.get("section")),
         "township":           _str(row.get("township")),
         "range":              _str(row.get("range")),
-        # Dot coordinates (bilinear-interpolated ink-dot position)
-        "dot_lat":            dot_lat,
-        "dot_lon":            dot_lon,
-        # Backward-compatible aliases for existing index.html JS (uses lat/lon/confidence)
+        # Dot coordinates (bilinear-interpolated ink-dot position). Not
+        # duplicated under a separate dot_lat/dot_lon key — lat/lon (used by
+        # the map JS) and geometry.coordinates already carry this value;
+        # a third copy on all 51k+ features was pure size with no reader.
         "lat":                dot_lat,
         "lon":                dot_lon,
         "confidence":         dot_conf,
-        # Cell centre (PLSS cell centre, for reference)
-        "cell_center_lat":    cc_lat,
-        "cell_center_lon":    cc_lon,
         # Resolution provenance
         "resolution":         _str(row.get("resolution_source")),
         "quadrant":           _str(row.get("effective_quad"))
                               or _str(row.get("unet_nw"))
                               or _str(row.get("ocr_quadrant_db")),
-        "quadrant_source":    _str(row.get("quadrant_source")),
-        "quadrant_agreement": _str(row.get("quadrant_agreement")),
         # Dot detector
         "dot_confidence":     dot_conf,
-        "dot_row":            _str(row.get("dot_row")),
-        "dot_col":            _str(row.get("dot_col")),
-        "dot_x_norm":         _safe_float(row.get("dot_x_norm")),
-        "dot_y_norm":         _safe_float(row.get("dot_y_norm")),
-        # Position within PLSS cell (0-1)
-        "cell_rel_x":         _safe_float(row.get("cell_rel_x")),
-        "cell_rel_y":         _safe_float(row.get("cell_rel_y")),
         # PLSS quadrant cell corners — four corners of the ~200-acre cell
         # Used by the map to draw a highlight polygon showing the certain area
         # (even if the exact dot position is uncertain, the cell is definitive)
